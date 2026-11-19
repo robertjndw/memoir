@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 struct MeetingDetailView: View {
@@ -150,3 +151,33 @@ struct MeetingDetailView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Summary") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    NavigationStack { MeetingDetailView(meeting: model.previewMeeting("Design Review")) }
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 760, height: 640)
+}
+
+#Preview("Not summarized") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    NavigationStack { MeetingDetailView(meeting: model.previewMeeting("Call at 9:15 AM")) }
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 760, height: 640)
+}
+
+#Preview("Recording") {
+    @Previewable @State var model = AppModel.preview {
+        let meeting = Meeting(title: "Weekly Sync", startDate: .now.addingTimeInterval(-754))
+        meeting.attendees = ["Maya Chen", "Jonas Weber"]
+        $0.simulateRecording(meeting, lines: Meeting.sampleLines, volatile: [.others: "Works for me, I'll tell"])
+    }
+    NavigationStack { MeetingDetailView(meeting: model.previewMeeting("Weekly Sync")) }
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 760, height: 640)
+}
+#endif

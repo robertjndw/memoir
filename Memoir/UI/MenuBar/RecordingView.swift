@@ -82,7 +82,34 @@ struct SourceWarning: View {
     }
 }
 
-#Preview("Meter and warning") {
+#if DEBUG
+#Preview("Recording") {
+    @Previewable @State var model = AppModel.preview {
+        $0.simulateRecording(Meeting(title: "Design Review"), lines: Meeting.sampleLines)
+    }
+    RecordingView()
+        .environment(model)
+        .padding()
+        .frame(width: 340)
+}
+
+#Preview("System audio missing") {
+    @Previewable @State var model = AppModel.preview {
+        $0.simulateRecording(
+            Meeting(title: "Design Review"),
+            elapsed: 12,
+            levels: AudioLevels(microphone: 0.4, system: 0),
+            unavailable: [.system]
+        )
+    }
+    RecordingView()
+        .environment(model)
+        .padding()
+        .frame(width: 340)
+}
+#endif
+
+#Preview("Timer and warning") {
     VStack(spacing: 12) {
         ElapsedTime(start: .now.addingTimeInterval(-754))
         SourceWarning(source: .system)

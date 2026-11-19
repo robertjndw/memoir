@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 struct MeetingRow: View {
@@ -80,3 +81,24 @@ extension View {
         modifier(MeetingActionsModifier(meeting: meeting))
     }
 }
+
+#if DEBUG
+// VStack because a plain List of these rows crashes the canvas. The list, calendar and
+// library previews show them in a real List.
+#Preview("Rows") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        let live = Meeting(title: "Weekly Sync", startDate: .now.addingTimeInterval(-600))
+        live.sourceAppName = "Microsoft Teams"
+        $0.simulateRecording(live)
+    }
+    QueriedMeetings { meetings in
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(meetings) { MeetingRow(meeting: $0) }
+        }
+        .padding()
+    }
+    .environment(model)
+    .modelContainer(model.container)
+    .frame(width: 340, alignment: .leading)
+}
+#endif

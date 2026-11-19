@@ -120,7 +120,7 @@ extension ChatDisplayMessage {
 }
 
 #Preview("Conversation") {
-    ChatMessageList(messages: ChatDisplayMessage.samples, streamingText: "", onSeek: { _ in })
+    ChatMessageList(messages: ChatDisplayMessage.samples, streamingText: nil, onSeek: { _ in })
         .frame(width: 600, height: 400)
 }
 

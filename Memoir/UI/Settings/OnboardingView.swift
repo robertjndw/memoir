@@ -367,7 +367,10 @@ private struct PageDots: View {
     }
 }
 
+#if DEBUG
 #Preview("Onboarding") {
+    @Previewable @State var model = AppModel.preview()
     OnboardingView()
-        .environment(AppModel.preview())
+        .environment(model)
 }
+#endif

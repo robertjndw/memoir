@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 struct TranscriptView: View {
@@ -202,3 +203,52 @@ private struct TranscriptBlockView: View {
         return result
     }
 }
+
+#if DEBUG
+#Preview("Transcript") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController())
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Playing") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    @Previewable @State var playback = PlaybackController.preview(at: 18, of: 42 * 60, playing: true)
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback)
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Live") {
+    @Previewable @State var model = AppModel.preview {
+        $0.simulateRecording(
+            Meeting(title: "Design Review"),
+            lines: Meeting.sampleLines,
+            volatile: [.others: "Works for me, I'll tell"]
+        )
+    }
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController())
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Listening") {
+    @Previewable @State var model = AppModel.preview { $0.simulateRecording(Meeting(title: "Design Review")) }
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController())
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Audio, no transcript") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    TranscriptView(meeting: model.previewMeeting("Voice Note"), playback: PlaybackController())
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+#endif

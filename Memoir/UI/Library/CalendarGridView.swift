@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// The weeks shown for a month, padded with neighbouring days so every row is complete.
@@ -155,3 +156,15 @@ private struct DayCell: View {
         return "\(date), \(recordings)"
     }
 }
+
+#if DEBUG
+#Preview {
+    @Previewable @State var day = Calendar.current.startOfDay(for: .now)
+    @Previewable @State var model = AppModel.preview(samples: true)
+    QueriedMeetings { meetings in
+        CalendarGridView(meetings: meetings, selectedDay: $day)
+    }
+    .modelContainer(model.container)
+    .frame(width: 340)
+}
+#endif

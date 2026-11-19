@@ -161,19 +161,42 @@ struct LibraryView: View {
     }
 }
 
+#if DEBUG
 #Preview("Library") {
-    let model = AppModel.preview()
-    _ = Meeting.samples(in: model.context)
-    return LibraryView()
+    @Previewable @State var model = AppModel.preview(samples: true)
+    LibraryView()
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 1080, height: 700)
+}
+
+#Preview("Selected meeting") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        $0.librarySelection = $0.previewMeeting("Design Review").id
+    }
+    LibraryView()
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 1080, height: 700)
+}
+
+#Preview("While recording") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        let live = Meeting(title: "Weekly Sync", startDate: .now.addingTimeInterval(-600))
+        $0.simulateRecording(live, lines: Meeting.sampleLines)
+        $0.librarySelection = live.id
+    }
+    LibraryView()
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 1080, height: 700)
 }
 
 #Preview("Empty") {
-    let model = AppModel.preview()
-    return LibraryView()
+    @Previewable @State var model = AppModel.preview()
+    LibraryView()
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 1080, height: 700)
 }
+#endif

@@ -79,6 +79,18 @@ final class PlaybackController {
         seek(to: currentTime + seconds)
     }
 
+    #if DEBUG
+    /// Looks loaded but has no player, so previews get enabled controls without an audio file.
+    static func preview(at time: TimeInterval, of duration: TimeInterval, playing: Bool = false) -> PlaybackController {
+        let controller = PlaybackController()
+        controller.isLoaded = true
+        controller.duration = duration
+        controller.currentTime = time
+        controller.isPlaying = playing
+        return controller
+    }
+    #endif
+
     func seek(to time: TimeInterval, play: Bool = false) {
         guard let player else { return }
         let upper = duration > 0 ? duration : time

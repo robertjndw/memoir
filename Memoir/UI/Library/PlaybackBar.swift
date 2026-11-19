@@ -76,3 +76,15 @@ struct PlaybackBar: View {
         .disabled(!playback.isLoaded)
     }
 }
+
+#if DEBUG
+#Preview("Playing") {
+    PlaybackBar(playback: .preview(at: 754, of: 42 * 60, playing: true))
+        .frame(width: 720)
+}
+
+#Preview("Not loaded") {
+    PlaybackBar(playback: PlaybackController())
+        .frame(width: 720)
+}
+#endif

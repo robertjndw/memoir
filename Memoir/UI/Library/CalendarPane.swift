@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// Content column for the Calendar section: month grid on top, the selected day's meetings below.
@@ -31,3 +32,33 @@ struct CalendarPane: View {
         .navigationTitle("Calendar")
     }
 }
+
+#if DEBUG
+#Preview("Calendar") {
+    @Previewable @State var selection: UUID?
+    @Previewable @State var day = Calendar.current.startOfDay(for: .now.addingTimeInterval(-3 * 3600))
+    @Previewable @State var model = AppModel.preview(samples: true)
+    QueriedMeetings { meetings in
+        NavigationStack {
+            CalendarPane(meetings: meetings, selection: $selection, selectedDay: $day)
+        }
+    }
+    .environment(model)
+    .modelContainer(model.container)
+    .frame(width: 360, height: 620)
+}
+
+#Preview("Empty day") {
+    @Previewable @State var selection: UUID?
+    @Previewable @State var day = Calendar.current.startOfDay(for: .now.addingTimeInterval(-10 * 86400))
+    @Previewable @State var model = AppModel.preview(samples: true)
+    QueriedMeetings { meetings in
+        NavigationStack {
+            CalendarPane(meetings: meetings, selection: $selection, selectedDay: $day)
+        }
+    }
+    .environment(model)
+    .modelContainer(model.container)
+    .frame(width: 360, height: 620)
+}
+#endif

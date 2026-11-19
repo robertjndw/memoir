@@ -113,10 +113,37 @@ private struct ErrorRow: View {
     }
 }
 
-#Preview("Meeting chat") {
-    let model = AppModel.preview()
-    return ChatView(scope: .library, onSeek: nil)
+#if DEBUG
+#Preview("Ask Memoir") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    ChatView(scope: .library, onSeek: nil)
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 640, height: 520)
 }
+
+#Preview("Meeting chat") {
+    @Previewable @State var model = AppModel.preview(samples: true) { model in
+        let meeting = model.previewMeeting("Design Review")
+        model.context.insert(ChatMessage(role: .user, text: "When do we launch?", meeting: meeting))
+        model.context.insert(ChatMessage(
+            role: .assistant,
+            text: "On **the first Monday of next month** [0:31]. Maya updates the prototype before then [0:16].",
+            date: .now.addingTimeInterval(1),
+            meeting: meeting
+        ))
+    }
+    ChatView(scope: .meeting(model.previewMeeting("Design Review").id), onSeek: { _ in })
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 640, height: 520)
+}
+
+#Preview("Unavailable") {
+    @Previewable @State var model = AppModel.preview(services: .inert)
+    ChatView(scope: .library, onSeek: nil)
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 640, height: 520)
+}
+#endif

@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 struct MeetingListView: View {
@@ -41,3 +42,44 @@ struct MeetingListView: View {
         .navigationTitle("Meetings")
     }
 }
+
+#if DEBUG
+#Preview("Meetings") {
+    @Previewable @State var selection: UUID?
+    @Previewable @State var search = ""
+    @Previewable @State var model = AppModel.preview(samples: true)
+    QueriedMeetings { meetings in
+        NavigationStack {
+            MeetingListView(meetings: meetings, selection: $selection, searchText: $search)
+        }
+    }
+    .environment(model)
+    .modelContainer(model.container)
+    .frame(width: 360, height: 520)
+}
+
+#Preview("No search results") {
+    @Previewable @State var selection: UUID?
+    @Previewable @State var search = "roadmap"
+    @Previewable @State var model = AppModel.preview(samples: true)
+    QueriedMeetings { meetings in
+        NavigationStack {
+            MeetingListView(meetings: meetings, selection: $selection, searchText: $search)
+        }
+    }
+    .environment(model)
+    .modelContainer(model.container)
+    .frame(width: 360, height: 520)
+}
+
+#Preview("Empty") {
+    @Previewable @State var selection: UUID?
+    @Previewable @State var search = ""
+    @Previewable @State var model = AppModel.preview()
+    NavigationStack {
+        MeetingListView(meetings: [], selection: $selection, searchText: $search)
+    }
+    .environment(model)
+    .frame(width: 360, height: 520)
+}
+#endif

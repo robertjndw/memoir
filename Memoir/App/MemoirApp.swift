@@ -97,15 +97,6 @@ extension AppModel {
         }
     }
     #endif
-
-    /// For SwiftUI previews.
-    static func preview() -> AppModel {
-        AppModel(
-            settings: AppSettings(defaults: UserDefaults(suiteName: "preview") ?? .standard),
-            container: .memoir(inMemory: true),
-            services: .inert
-        )
-    }
 }
 
 private struct RegularAppWindow: ViewModifier {

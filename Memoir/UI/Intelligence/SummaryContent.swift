@@ -109,7 +109,7 @@ extension MeetingSummary {
 }
 
 extension MeetingSummary {
-    static let sample = MeetingSummary(
+    nonisolated static let sample = MeetingSummary(
         title: "Q3 planning",
         overview: "The team reviewed Q3 priorities and agreed to ship the new onboarding flow before the end of the quarter, deferring the analytics rework.",
         keyPoints: [

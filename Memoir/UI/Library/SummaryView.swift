@@ -210,13 +210,21 @@ private struct ErrorBanner: View {
         .frame(width: 720, height: 400)
 }
 
+#if DEBUG
 #Preview("Live model") {
-    let model = AppModel.preview()
-    let meeting = Meeting(title: "Q3 planning")
-    meeting.summary = .sample
-    model.context.insert(meeting)
-    return SummaryView(meeting: meeting)
+    @Previewable @State var model = AppModel.preview(samples: true)
+    SummaryView(meeting: model.previewMeeting("Design Review"))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 600)
 }
+
+// Click Summarize in the live canvas to watch the canned summary stream in.
+#Preview("Live model, not summarized") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    SummaryView(meeting: model.previewMeeting("Call at 9:15 AM"))
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 600)
+}
+#endif

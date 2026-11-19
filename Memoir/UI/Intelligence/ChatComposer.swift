@@ -62,3 +62,10 @@ struct ChatComposer: View {
         .padding()
         .frame(width: 520)
 }
+
+#Preview("Responding") {
+    @Previewable @State var text = ""
+    ChatComposer(text: $text, isResponding: true, isEnabled: true, send: {}, stop: {})
+        .padding()
+        .frame(width: 520)
+}

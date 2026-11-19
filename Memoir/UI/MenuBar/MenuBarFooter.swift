@@ -35,3 +35,12 @@ struct MenuBarFooter: View {
         .padding(.vertical, 10)
     }
 }
+
+#if DEBUG
+#Preview {
+    @Previewable @State var model = AppModel.preview()
+    MenuBarFooter()
+        .environment(model)
+        .frame(width: 340)
+}
+#endif

@@ -126,14 +126,23 @@ struct RecentRow: View {
     }
 }
 
+#if DEBUG
 #Preview("Idle with meetings") {
-    let container = ModelContainer.memoir(inMemory: true)
-    for (index, name) in ["Design review", "Weekly sync", "1:1 with Sam"].enumerated() {
-        let meeting = Meeting(title: name, startDate: .now.addingTimeInterval(Double(-index) * 86400))
-        meeting.duration = 1800 + Double(index) * 600
-        container.mainContext.insert(meeting)
+    @Previewable @State var model = AppModel.preview(hasCompletedOnboarding: true, samples: true)
+    MenuBarView()
+        .environment(model)
+        .modelContainer(model.container)
+}
+#endif
+
+#Preview("Rows") {
+    VStack(alignment: .leading, spacing: 10) {
+        UpcomingRow(title: "Weekly Design Review", start: .now.addingTimeInterval(25 * 60))
+        UpcomingRow(title: "Quarterly Planning", start: .now.addingTimeInterval(2 * 3600 + 30 * 60))
+        Divider()
+        RecentRow(title: "Design Review", date: .now.addingTimeInterval(-3 * 3600), duration: 42 * 60) {}
+        RecentRow(title: "All Hands", date: .now.addingTimeInterval(-86400), duration: 75 * 60) {}
     }
-    return MenuBarView()
-        .environment(AppModel.preview())
-        .modelContainer(container)
+    .padding()
+    .frame(width: 340)
 }

@@ -99,8 +99,47 @@ struct FinishSetupRow: View {
     }
 }
 
+#if DEBUG
 #Preview("Idle") {
+    @Previewable @State var model = AppModel.preview()
     MenuBarView()
-        .environment(AppModel.preview())
-        .modelContainer(.memoir(inMemory: true))
+        .environment(model)
+        .modelContainer(model.container)
 }
+
+#Preview("Recording") {
+    @Previewable @State var model = AppModel.preview(hasCompletedOnboarding: true) {
+        $0.simulateRecording(
+            Meeting(title: "Design Review"),
+            lines: Meeting.sampleLines,
+            volatile: [.others: "Works for me, I'll tell"]
+        )
+    }
+    MenuBarView()
+        .environment(model)
+        .modelContainer(model.container)
+}
+
+#Preview("Starting") {
+    @Previewable @State var model = AppModel.preview(hasCompletedOnboarding: true) { $0.simulate(.starting) }
+    MenuBarView()
+        .environment(model)
+        .modelContainer(model.container)
+}
+
+#Preview("Saving") {
+    @Previewable @State var model = AppModel.preview(hasCompletedOnboarding: true) { $0.simulate(.finishing) }
+    MenuBarView()
+        .environment(model)
+        .modelContainer(model.container)
+}
+
+#Preview("Error") {
+    @Previewable @State var model = AppModel.preview(hasCompletedOnboarding: true) {
+        $0.errorMessage = "Live transcription is unavailable: the speech model for English is not installed."
+    }
+    MenuBarView()
+        .environment(model)
+        .modelContainer(model.container)
+}
+#endif

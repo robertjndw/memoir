@@ -421,7 +421,10 @@ private struct PermissionRow: View {
     }
 }
 
+#if DEBUG
 #Preview("Settings") {
+    @Previewable @State var model = AppModel.preview()
     SettingsView()
-        .environment(AppModel.preview())
+        .environment(model)
 }
+#endif

@@ -430,6 +430,35 @@ final class AppModel {
     }
 }
 
+#if DEBUG
+extension AppModel {
+    /// Fakes a running recording for previews, no audio capture. Has to live in this file
+    /// because the state is `private(set)`.
+    func simulateRecording(
+        _ meeting: Meeting,
+        elapsed: TimeInterval = 754,
+        lines: [TranscriptLine] = [],
+        volatile: [Speaker: String] = [:],
+        levels: AudioLevels = AudioLevels(microphone: 0.55, system: 0.3),
+        unavailable: Set<AudioSource> = []
+    ) {
+        meeting.status = .recording
+        context.insert(meeting)
+        recordingState = .recording(meeting.id)
+        recordingStartDate = .now.addingTimeInterval(-elapsed)
+        liveLines = lines
+        volatileText = volatile
+        self.levels = levels
+        unavailableSources = unavailable
+    }
+
+    /// For the transitional states that have no data of their own.
+    func simulate(_ state: RecordingState) {
+        recordingState = state
+    }
+}
+#endif
+
 /// Read access to the store for chat retrieval, callable from any isolation.
 @MainActor
 final class StoreCorpus: TranscriptCorpus {
