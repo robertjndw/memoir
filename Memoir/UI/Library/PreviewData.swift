@@ -123,7 +123,8 @@ extension Meeting {
         let review = Meeting(title: "Design Review", hasCustomTitle: true, startDate: now.addingTimeInterval(-3 * 3600))
         review.status = .ready
         review.duration = 42 * 60
-        review.sourceAppName = "Zoom"
+        review.sourceAppName = "FaceTime"
+        review.sourceAppBundleID = "com.apple.FaceTime"
         review.attendees = ["Maya Chen", "Jonas Weber"]
         review.summary = MeetingSummary(
             title: "Design Review",
@@ -137,7 +138,8 @@ extension Meeting {
         let call = Meeting(title: "Call at 9:15 AM", startDate: now.addingTimeInterval(-26 * 3600))
         call.status = .ready
         call.duration = 65 * 60
-        call.sourceAppName = "FaceTime"
+        call.sourceAppName = "Zoom"
+        call.sourceAppBundleID = "us.zoom.xos"
         add([
             TranscriptLine(speaker: .unknown, start: 0, end: 6, text: "Quick sync about the budget numbers."),
             TranscriptLine(speaker: .unknown, start: 14, end: 20, text: "Numbers look fine to me."),

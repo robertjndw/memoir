@@ -59,7 +59,7 @@ struct TranscriptTail: View {
     }
 
     private func entry(speaker: Speaker, text: String, secondary: Bool) -> some View {
-        let label = Text(speaker.label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        let label = Text(speaker.label).font(.caption.weight(.semibold)).foregroundStyle(TranscriptLineRow.tint(for: speaker))
         let body = Text(text).foregroundStyle(secondary ? .secondary : .primary)
         return Text("\(label)  \(body)")
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -138,10 +138,13 @@ struct TranscriptScroller: View {
     @ViewBuilder
     private var livePreview: some View {
         ForEach(Speaker.allCases.filter { model.volatileText[$0]?.isEmpty == false }, id: \.self) { speaker in
-            VStack(alignment: .leading, spacing: 2) {
-                Text(speaker.label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(TranscriptLineRow.tint(for: speaker))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    SpeakerAvatar(speaker: speaker)
+                    Text(speaker.label)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(TranscriptLineRow.tint(for: speaker))
+                }
                 Text(model.volatileText[speaker] ?? "")
                     .foregroundStyle(.secondary)
             }

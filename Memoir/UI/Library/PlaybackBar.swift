@@ -1,16 +1,18 @@
 import AppKit
 import SwiftUI
 
-/// Transport for a finished recording, laid out like Voice Memos: a full-width timeline with the
+/// Transport for a finished recording, laid out like Voice Memos: a full-width waveform with the
 /// controls centered beneath it, attached to the bottom edge of the meeting pane.
 struct PlaybackBar: View {
     var playback: PlaybackController
+    /// Sorted by start; colours the waveform by who was speaking.
+    var speakers: [SpeakerSpan] = []
     @State private var skipBackCount = 0
     @State private var skipForwardCount = 0
 
     var body: some View {
         VStack(spacing: 6) {
-            PlaybackTimeline(playback: playback)
+            PlaybackTimeline(playback: playback, speakers: speakers)
 
             // Speed and transport share one row; the transport stays optically centered because
             // the speed menu sits in an overlay instead of pushing it aside.
@@ -90,6 +92,7 @@ struct PlaybackBar: View {
 /// transport buttons and menu.
 private struct PlaybackTimeline: View {
     var playback: PlaybackController
+    let speakers: [SpeakerSpan]
     @State private var scrubTime: TimeInterval?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -97,24 +100,34 @@ private struct PlaybackTimeline: View {
 
     var body: some View {
         let remaining = max(0, playback.duration - shownTime)
-        HStack(spacing: 10) {
+        let duration = max(playback.duration, 0.1)
+        HStack(spacing: 12) {
             Text(LibraryFormat.timecode(shownTime))
                 .contentTransition(.numericText(value: shownTime))
                 .frame(minWidth: 48, alignment: .trailing)
                 .accessibilityHidden(true)
 
-            Slider(
-                value: Binding(get: { shownTime }, set: { scrubTime = $0 }),
-                in: 0...max(playback.duration, 0.1)
-            ) { editing in
-                if !editing, let scrubTime {
-                    playback.seek(to: scrubTime)
-                    self.scrubTime = nil
+            WaveformScrubber(
+                peaks: playback.waveform,
+                speakers: speakers,
+                duration: duration,
+                progress: shownTime / duration,
+                onScrub: { scrubTime = $0 * duration },
+                onCommit: { fraction in
+                    playback.seek(to: fraction * duration)
+                    scrubTime = nil
                 }
+            )
+            .frame(height: 34)
+            // VoiceOver and Full Keyboard Access get a regular slider.
+            .accessibilityRepresentation {
+                Slider(
+                    value: Binding(get: { shownTime }, set: { playback.seek(to: $0) }),
+                    in: 0...duration
+                )
+                .accessibilityLabel("Playback position")
+                .accessibilityValue(LibraryFormat.timecode(shownTime))
             }
-            .controlSize(.small)
-            .accessibilityLabel("Playback position")
-            .accessibilityValue(LibraryFormat.timecode(shownTime))
 
             Text("-" + LibraryFormat.timecode(remaining))
                 .contentTransition(.numericText(value: -remaining))
@@ -214,7 +227,10 @@ private struct PlaybackSpaceKey: NSViewRepresentable {
 
 #if DEBUG
 #Preview("Playing") {
-    PlaybackBar(playback: .preview(at: 754, of: 42 * 60, playing: true))
+    PlaybackBar(
+        playback: .preview(at: 754, of: 42 * 60, playing: true),
+        speakers: (0..<21).map { SpeakerSpan(start: Double($0) * 120, end: Double($0) * 120 + 110, speaker: $0.isMultiple(of: 3) ? .me : .others) }
+    )
         .frame(width: 720)
         .padding(.top, 40)
         .background(.background)

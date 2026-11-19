@@ -39,6 +39,10 @@ struct MeetingDetailView: View {
 
     private var isRecording: Bool { model.recordingMeetingID == meeting.id }
 
+    private var speakerSpans: [SpeakerSpan] {
+        meeting.sortedLines.map { SpeakerSpan(start: $0.start, end: $0.end, speaker: $0.speaker) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -52,18 +56,24 @@ struct MeetingDetailView: View {
             // A short crossfade only, which is fine with Reduce Motion as nothing moves.
             .animation(.easeInOut(duration: 0.15), value: tab)
         }
-        .background { tabShortcuts }
         // A safe area bar rather than an inset, so scrolling content softly fades out under the
         // player instead of ending at a hard line.
         .safeAreaBar(edge: .bottom, spacing: 0) {
             // The chat has its own composer at the bottom edge, and two stacked bars crowd it.
             if meeting.audioURL != nil, !isRecording, tab != .chat {
-                PlaybackBar(playback: playback)
+                PlaybackBar(playback: playback, speakers: speakerSpans)
                     .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.15), value: tab == .chat)
         .toolbar { toolbar }
+        .focusedSceneValue(\.focusedMeeting, FocusedMeeting(
+            meeting: meeting,
+            isRecording: isRecording,
+            commands: commands,
+            tab: $tab,
+            rename: { titleFocused = true }
+        ))
         .navigationTitle(meeting.title)
         .task(id: meeting.id) {
             if let url = meeting.audioURL, !isRecording {
@@ -84,42 +94,62 @@ struct MeetingDetailView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            TextField("Title", text: $titleDraft)
-                .textFieldStyle(.plain)
-                .font(.title.weight(.semibold))
-                .focused($titleFocused)
-                .onSubmit(commitTitle)
-                .onChange(of: titleFocused) { _, focused in
-                    if !focused { commitTitle() }
+        HStack(alignment: .top, spacing: 14) {
+            MeetingIcon(bundleID: meeting.sourceAppBundleID, size: 44)
+                // Lines the icon up with the title's cap height.
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Title", text: $titleDraft)
+                    .textFieldStyle(.plain)
+                    .font(.title.weight(.semibold))
+                    .focused($titleFocused)
+                    .onSubmit(commitTitle)
+                    .onChange(of: titleFocused) { _, focused in
+                        if !focused { commitTitle() }
+                    }
+                    .accessibilityLabel("Meeting title")
+                HStack(spacing: 6) {
+                    if isRecording {
+                        Label("Recording", systemImage: "record.circle.fill")
+                            .foregroundStyle(.red)
+                            .symbolEffect(.pulse, isActive: !reduceMotion)
+                            .transition(.opacity)
+                    }
+                    Text(meeting.startDate, format: .dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
+                    if !isRecording, meeting.duration > 0 {
+                        Text("\u{00B7} \(LibraryFormat.length(meeting.duration))")
+                            .transition(.opacity)
+                    }
+                    if let app = meeting.sourceAppName, !app.isEmpty {
+                        Text("\u{00B7} \(app)")
+                    }
                 }
-                .accessibilityLabel("Meeting title")
-            HStack(spacing: 6) {
-                if isRecording {
-                    Label("Recording", systemImage: "record.circle.fill")
-                        .foregroundStyle(.red)
-                        .symbolEffect(.pulse, isActive: !reduceMotion)
-                        .transition(.opacity)
-                }
-                Text(meeting.startDate, format: .dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
-                if !isRecording, meeting.duration > 0 {
-                    Text("\u{00B7} \(LibraryFormat.length(meeting.duration))")
-                        .transition(.opacity)
+                .foregroundStyle(.secondary)
+                .animation(.smooth(duration: 0.25), value: isRecording)
+                if !meeting.attendees.isEmpty {
+                    HStack(spacing: 8) {
+                        AvatarStack(names: meeting.attendees, size: 20)
+                        Text(meeting.attendees.formatted(.list(type: .and, width: .narrow)))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .padding(.top, 4)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Attendees: \(meeting.attendees.formatted(.list(type: .and)))")
                 }
             }
-            .foregroundStyle(.secondary)
-            .animation(.smooth(duration: 0.25), value: isRecording)
-            if !meeting.attendees.isEmpty {
-                Text(meeting.attendees.formatted(.list(type: .and, width: .narrow)))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .accessibilityLabel("Attendees: \(meeting.attendees.formatted(.list(type: .and)))")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if isRecording {
+                LiveWaveform(barCount: 32)
+                    .frame(width: 120, height: 32)
+                    .padding(.top, 6)
+                    .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 14)
+        .animation(.smooth(duration: 0.3), value: isRecording)
     }
 
     private func commitTitle() {
@@ -144,21 +174,6 @@ struct MeetingDetailView: View {
         }
     }
 
-    /// Segmented controls can't carry per-segment shortcuts, so Command-1/2/3 come from invisible
-    /// buttons. They stay in the hierarchy (not `.hidden()`) so their shortcuts remain registered.
-    private var tabShortcuts: some View {
-        ZStack {
-            ForEach(Tab.allCases) { item in
-                Button(item.rawValue) { tab = item }
-                    .keyboardShortcut(item.shortcut, modifiers: .command)
-            }
-        }
-        .opacity(0)
-        .frame(width: 0, height: 0)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
@@ -173,31 +188,28 @@ struct MeetingDetailView: View {
             .help("Switch between summary, transcript and chat (Command-1, 2, 3)")
         }
 
+        // Only Share stays visible. The rest is in More and in the Meeting menu, which also
+        // holds the keyboard shortcuts.
         ToolbarItemGroup {
-            Button { commands.export(meeting) } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
-            }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
-            .help("Export as Markdown")
-
             ShareLink(
                 item: MeetingExporter.markdown(for: meeting),
                 subject: Text(meeting.title),
                 preview: SharePreview(meeting.title)
             )
-            .help("Share Markdown")
+            .help("Share")
 
-            Button { commands.reveal(meeting) } label: {
-                Label("Reveal in Finder", systemImage: "folder")
+            Menu {
+                Button("Rename", systemImage: "pencil") { titleFocused = true }
+                Button("Export as Markdown...", systemImage: "square.and.arrow.down") { commands.export(meeting) }
+                Button("Reveal in Finder", systemImage: "folder") { commands.reveal(meeting) }
+                Divider()
+                Button("Delete Meeting...", systemImage: "trash", role: .destructive) { commands.delete(meeting) }
+                    .disabled(isRecording)
+            } label: {
+                Label("More", systemImage: "ellipsis")
             }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
-            .help("Reveal in Finder")
-
-            Button { commands.delete(meeting) } label: {
-                Label("Delete", systemImage: "trash")
-            }
-            .disabled(isRecording)
-            .help("Delete Meeting")
+            .menuIndicator(.hidden)
+            .help("More")
         }
     }
 }

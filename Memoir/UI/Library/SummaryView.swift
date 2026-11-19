@@ -13,7 +13,9 @@ struct SummaryView: View {
             state: state(activity: activity),
             availability: model.intelligenceAvailability,
             hasTranscript: !meeting.segments.isEmpty,
-            summarize: { Task { await model.summarize(meeting) } }
+            completedItems: Set(meeting.completedActionItems),
+            summarize: { Task { await model.summarize(meeting) } },
+            toggleItem: { model.toggleActionItem($0, in: meeting) }
         )
         .onAppear { model.refresh() }
     }
@@ -46,7 +48,9 @@ struct SummaryPane: View {
     let state: State
     let availability: IntelligenceAvailability
     let hasTranscript: Bool
+    var completedItems: Set<String> = []
     let summarize: () -> Void
+    var toggleItem: ((String) -> Void)?
 
     var body: some View {
         switch state {
@@ -70,12 +74,14 @@ struct SummaryPane: View {
     }
 
     private func progress(value: Double?, label: LocalizedStringKey) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
+            IntelligenceActivity(label)
+                .font(.title3)
             if let value {
-                ProgressView(value: value) { Text(label) }
-                    .frame(maxWidth: 280)
-            } else {
-                ProgressView { Text(label) }
+                ProgressView(value: value)
+                    .tint(IntelligencePalette.linear)
+                    .frame(maxWidth: 240)
+                    .accessibilityLabel(Text(label))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -92,12 +98,17 @@ struct SummaryPane: View {
             IntelligenceUnavailableView(availability: availability)
         } else {
             ContentUnavailableView {
-                Label("No Summary Yet", systemImage: "sparkles")
+                Label {
+                    Text("No Summary Yet")
+                } icon: {
+                    Image(systemName: "sparkles").foregroundStyle(IntelligencePalette.linear)
+                }
             } description: {
                 Text("Summarize this meeting to get the key points, decisions and action items.")
             } actions: {
-                Button("Summarize", action: summarize)
-                    .buttonStyle(.borderedProminent)
+                Button("Summarize", systemImage: "sparkles", action: summarize)
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
             }
         }
     }
@@ -116,13 +127,16 @@ struct SummaryPane: View {
                     IntelligenceUnavailableView(availability: availability, compact: true)
                 }
                 if let progressLabel {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text(progressLabel).foregroundStyle(.secondary)
-                    }
+                    IntelligenceActivity(progressLabel)
+                        .transition(.blurReplace)
                 }
                 if let summary {
-                    SummaryContent(summary: summary)
+                    // Items can't be ticked off while the summary is still streaming.
+                    SummaryContent(
+                        summary: summary,
+                        completed: completedItems,
+                        onToggle: canRegenerate ? toggleItem : nil
+                    )
                     if canRegenerate {
                         actions(for: summary)
                     }
@@ -132,12 +146,13 @@ struct SummaryPane: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 24)
             .frame(maxWidth: .infinity)
+            .animation(.smooth(duration: 0.4), value: progressLabel == nil)
         }
     }
 
     private func actions(for summary: MeetingSummary) -> some View {
         HStack(spacing: 10) {
-            CopyButton(text: summary.markdown)
+            CopyButton(text: summary.markdown(completed: completedItems))
             Button(action: summarize) {
                 Label("Regenerate", systemImage: "arrow.clockwise")
             }
@@ -171,6 +186,7 @@ private struct CopyButton: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .animation(.smooth(duration: 0.2), value: didCopy)
+        .sensoryFeedback(.alignment, trigger: didCopy) { _, copied in copied }
         .onDisappear { resetTask?.cancel() }
     }
 }

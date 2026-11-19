@@ -9,6 +9,7 @@ nonisolated enum MeetingExporter {
         attendees: [String],
         summary: MeetingSummary?,
         lines: [TranscriptLine],
+        completedActionItems: Set<String> = [],
         locale: Locale = .current,
         timeZone: TimeZone = .current
     ) -> String {
@@ -34,8 +35,9 @@ nonisolated enum MeetingExporter {
             section("Key Points", summary.keyPoints.map { "- \($0)" }, into: &out)
             section("Decisions", summary.decisions.map { "- \($0)" }, into: &out)
             section("Action Items", summary.actionItems.map { item in
-                item.owner.flatMap { $0.isEmpty ? nil : $0 }.map { "- [ ] \(item.task) (\($0))" }
-                    ?? "- [ ] \(item.task)"
+                let box = completedActionItems.contains(item.task) ? "[x]" : "[ ]"
+                return item.owner.flatMap { $0.isEmpty ? nil : $0 }.map { "- \(box) \(item.task) (\($0))" }
+                    ?? "- \(box) \(item.task)"
             }, into: &out)
         }
 
@@ -82,7 +84,8 @@ extension MeetingExporter {
             duration: meeting.duration,
             attendees: meeting.attendees,
             summary: meeting.summary,
-            lines: meeting.sortedLines
+            lines: meeting.sortedLines,
+            completedActionItems: Set(meeting.completedActionItems)
         )
     }
 }

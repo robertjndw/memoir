@@ -24,6 +24,7 @@ struct MemoirApp: App {
         }
         .modelContainer(model.container)
         .defaultSize(width: 1080, height: 700)
+        .commands { MeetingMenuCommands() }
         .defaultLaunchBehavior(.suppressed)
 
         Window("Welcome to Memoir", id: AppModel.WindowID.onboarding) {
@@ -123,13 +124,29 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var now = Date.now
+
     var body: some View {
         // Status items are rendered as templates, so state is carried by the glyph and motion, not colour.
-        Image(systemName: model.isRecording ? "record.circle.fill" : "waveform")
-            .symbolEffect(.pulse, options: .repeating, isActive: model.isRecording && !reduceMotion)
-            .accessibilityLabel(model.isRecording ? "Memoir, recording" : "Memoir")
-            .onAppear {
-                model.openWindow = { id in openWindow(id: id) }
+        HStack(spacing: 4) {
+            Image(systemName: model.isRecording ? "record.circle.fill" : "waveform")
+                .symbolEffect(.pulse, options: .repeating, isActive: model.isRecording && !reduceMotion)
+            if model.isRecording, let start = model.recordingStartDate {
+                Text(LibraryFormat.timecode(now.timeIntervalSince(start)))
+                    .monospacedDigit()
             }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.isRecording ? "Memoir, recording" : "Memoir")
+        .onAppear {
+            model.openWindow = { id in openWindow(id: id) }
+        }
+        // Driven by state instead of TimelineView, which isn't guaranteed to update in a MenuBarExtra label.
+        .task(id: model.isRecording) {
+            while model.isRecording, !Task.isCancelled {
+                now = .now
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 }

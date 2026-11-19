@@ -47,6 +47,7 @@ struct TranscriptLineRow: View {
 
     private var header: some View {
         HStack(spacing: 6) {
+            SpeakerAvatar(speaker: line.speaker)
             Text(line.speaker.label)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Self.tint(for: line.speaker))
@@ -154,6 +155,20 @@ struct TranscriptLineRow: View {
             searchRange = found.upperBound..<text.endIndex
         }
         return result
+    }
+}
+
+struct SpeakerAvatar: View {
+    let speaker: Speaker
+    var size: CGFloat = 20
+
+    var body: some View {
+        Image(systemName: speaker == .others ? "person.2.fill" : "person.fill")
+            .font(.system(size: size * 0.48, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(speaker == .me ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(Color.gray.gradient), in: .circle)
+            .accessibilityHidden(true)
     }
 }
 

@@ -34,23 +34,46 @@ struct TranscriptView: View {
             ContentUnavailableView("Listening", systemImage: "waveform", description: Text("The transcript appears here as people speak."))
         } else if meeting.audioURL != nil {
             ContentUnavailableView {
-                Label("No Transcript", systemImage: "text.alignleft")
+                Label("No Transcript", systemImage: "quote.bubble")
             } description: {
                 Text("This recording has audio but no transcript yet.")
             } actions: {
-                if model.retranscribing.contains(meeting.id) {
-                    ProgressView {
-                        Text("Transcribing...")
+                // Same style as the Summarize button in the summary tab.
+                Group {
+                    if model.retranscribing.contains(meeting.id) {
+                        TranscribingStatus()
+                            .transition(.blurReplace)
+                    } else {
+                        Button("Transcribe Recording", systemImage: "waveform") {
+                            Task { await model.retranscribe(meeting) }
+                        }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
+                        .transition(.blurReplace)
                     }
-                } else {
-                    Button("Transcribe Recording") {
-                        Task { await model.retranscribe(meeting) }
-                    }
-                    .buttonStyle(.borderedProminent)
                 }
+                .animation(.smooth(duration: 0.3), value: model.retranscribing.contains(meeting.id))
             }
         } else {
-            ContentUnavailableView("No Transcript", systemImage: "text.alignleft", description: Text("Nothing was transcribed for this meeting."))
+            ContentUnavailableView("No Transcript", systemImage: "quote.bubble", description: Text("Nothing was transcribed for this meeting."))
+        }
+    }
+
+    /// Waveform instead of sparkles, since transcription uses the speech model and not Apple Intelligence.
+    private struct TranscribingStatus: View {
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform")
+                    .foregroundStyle(.tint)
+                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+                    .accessibilityHidden(true)
+                ShimmeringText("Transcribing...")
+            }
+            .font(.title3)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
         }
     }
 
@@ -144,6 +167,16 @@ struct TranscriptView: View {
 #Preview("Listening") {
     @Previewable @State var model = AppModel.preview { $0.simulateRecording(Meeting(title: "Design Review")) }
     TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController())
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Transcribing") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        $0.simulateTranscribing($0.previewMeeting("Voice Note"))
+    }
+    TranscriptView(meeting: model.previewMeeting("Voice Note"), playback: PlaybackController())
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)

@@ -24,6 +24,9 @@ final class Meeting {
     // Stored as JSON rather than a composite attribute: SwiftData is unreliable with nested
     // arrays of Codable structs.
     var summaryData: Data?
+    /// Completed summary action items, keyed by task text instead of index so they survive
+    /// regenerating the summary. Leftover entries are harmless.
+    var completedActionItems: [String] = []
 
     @Relationship(deleteRule: .cascade, inverse: \TranscriptSegment.meeting)
     var segments: [TranscriptSegment] = []

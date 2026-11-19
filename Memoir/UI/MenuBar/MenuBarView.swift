@@ -25,8 +25,12 @@ struct MenuBarView: View {
             MenuBarFooter()
         }
         .frame(width: 320)
+        // Otherwise the window can end up shorter than the content and the rows overlap the footer.
+        .fixedSize(horizontal: false, vertical: true)
         .animation(.smooth(duration: 0.3), value: model.recordingState)
         .animation(.smooth(duration: 0.3), value: model.errorMessage)
+        // Keyed on the state rather than the click, so a failed start gives no feedback.
+        .sensoryFeedback(.levelChange, trigger: model.isRecording)
         .onAppear { model.refresh() }
     }
 

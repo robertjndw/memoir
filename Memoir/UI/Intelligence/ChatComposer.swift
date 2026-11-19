@@ -34,6 +34,7 @@ struct ChatComposer: View {
                 Button(action: stop) {
                     Image(systemName: "stop.circle.fill").font(.title2)
                 }
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
                 .buttonStyle(.plain)
                 .help("Stop")
                 .accessibilityLabel("Stop")
@@ -47,11 +48,14 @@ struct ChatComposer: View {
                 .help("Send")
                 .accessibilityLabel("Send")
                 .padding(.bottom, 4)
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
+        .animation(.smooth(duration: 0.25), value: isResponding)
         .padding(.leading, 14)
         .padding(.trailing, 8)
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .intelligenceGlow(isActive: isResponding, cornerRadius: 20)
         .onAppear { focused = true }
     }
 }

@@ -4,22 +4,38 @@ import SwiftUI
 struct MeetingRow: View {
     let meeting: Meeting
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isRecording: Bool { model.recordingMeetingID == meeting.id }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                if isRecording {
-                    Image(systemName: "record.circle.fill")
-                        .foregroundStyle(.red)
-                        .symbolEffect(.pulse)
-                        .accessibilityLabel("Recording")
+        HStack(alignment: .top, spacing: 10) {
+            MeetingIcon(bundleID: meeting.sourceAppBundleID, size: 30)
+                .overlay(alignment: .bottomTrailing) {
+                    if isRecording {
+                        Image(systemName: "record.circle.fill")
+                            .font(.system(size: 12))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .red)
+                            .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+                            .background(.background, in: .circle)
+                            .offset(x: 3, y: 3)
+                            .accessibilityLabel("Recording")
+                            .transition(.scale.combined(with: .opacity))
+                    }
                 }
-                Text(meeting.title)
-                    .font(.headline)
-                    .lineLimit(1)
-            }
+                .animation(.smooth(duration: 0.25), value: isRecording)
+            text
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var text: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(meeting.title)
+                .font(.headline)
+                .lineLimit(1)
             Text(details)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -31,8 +47,6 @@ struct MeetingRow: View {
                     .lineLimit(1)
             }
         }
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
     }
 
     private var details: String {
@@ -88,7 +102,8 @@ extension View {
 #Preview("Rows") {
     @Previewable @State var model = AppModel.preview(samples: true) {
         let live = Meeting(title: "Weekly Sync", startDate: .now.addingTimeInterval(-600))
-        live.sourceAppName = "Microsoft Teams"
+        live.sourceAppName = "FaceTime"
+        live.sourceAppBundleID = "com.apple.FaceTime"
         $0.simulateRecording(live)
     }
     QueriedMeetings { meetings in

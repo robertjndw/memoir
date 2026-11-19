@@ -21,24 +21,33 @@ struct ChatEmptyState: View {
         }
     }
 
+    @State private var appeared = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(spacing: 18) {
             Image(systemName: "sparkles")
                 .font(.largeTitle)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(IntelligencePalette.linear)
+                .symbolEffect(.bounce, value: appeared)
                 .accessibilityHidden(true)
             Text(headline).font(.title3.weight(.semibold))
             VStack(spacing: 8) {
-                ForEach(Self.suggestions(for: scope), id: \.self) { suggestion in
+                ForEach(Array(Self.suggestions(for: scope).enumerated()), id: \.element) { index, suggestion in
                     Button(suggestion) { ask(suggestion) }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
                         .buttonBorderShape(.capsule)
                         .disabled(!isEnabled)
+                        .opacity(appeared ? 1 : 0)
+                        .offset(y: appeared || reduceMotion ? 0 : 10)
+                        .blur(radius: appeared || reduceMotion ? 0 : 4)
+                        .animation(.smooth(duration: 0.45).delay(0.08 * Double(index + 1)), value: appeared)
                 }
             }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { appeared = true }
     }
 }
 

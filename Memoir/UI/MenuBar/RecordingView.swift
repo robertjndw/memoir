@@ -4,19 +4,13 @@ struct RecordingView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                RecordingIndicator()
-                Text("Recording")
-                    .font(.headline)
-                Spacer()
-                ElapsedTime(start: model.recordingStartDate)
-            }
-            .padding(.horizontal, 8)
+        VStack(alignment: .leading, spacing: 14) {
+            RecordingHeader()
 
             VStack(spacing: 8) {
-                LevelMeter(symbol: "mic.fill", label: "Microphone level", level: model.levels.microphone)
-                LevelMeter(symbol: "speaker.wave.2.fill", label: "System audio level", level: model.levels.system)
+                LiveWaveform()
+                    .frame(height: 44)
+                SourceLegend()
             }
             .padding(.horizontal, 8)
 
@@ -40,6 +34,83 @@ struct RecordingView: View {
             .accessibilityLabel("Stop recording")
         }
         .animation(.smooth(duration: 0.3), value: model.unavailableSources)
+    }
+}
+
+private struct RecordingHeader: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let meeting = model.recordingMeetingID.flatMap(model.meeting(with:))
+        // The only way into the Library while recording, since Recent is hidden then.
+        Button {
+            model.openLibrary(selecting: model.recordingMeetingID)
+        } label: {
+            content(meeting)
+        }
+        .buttonStyle(MenuRowStyle())
+        .keyboardShortcut("l", modifiers: .command)
+        .accessibilityHint("Opens the live transcript in the Library")
+    }
+
+    private func content(_ meeting: Meeting?) -> some View {
+        HStack(spacing: 10) {
+            MeetingIcon(bundleID: meeting?.sourceAppBundleID, size: 34)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(meeting?.title ?? String(localized: "Recording"))
+                    .font(.headline)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    RecordingIndicator()
+                        .font(.caption)
+                    Text("Recording")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 8)
+            ElapsedTime(start: model.recordingStartDate)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Also the VoiceOver element for the input levels.
+private struct SourceLegend: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 16) {
+            entry(.microphone, label: "You", symbol: "mic.fill", mutedSymbol: "mic.slash.fill", level: model.levels.microphone)
+            entry(.system, label: "Others", symbol: "speaker.wave.2.fill", mutedSymbol: "speaker.slash.fill", level: model.levels.system)
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private func entry(
+        _ source: AudioSource,
+        label: LocalizedStringKey,
+        symbol: String,
+        mutedSymbol: String,
+        level: Float
+    ) -> some View {
+        let unavailable = model.unavailableSources.contains(source)
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(speakerColor(source == .microphone ? .me : .others))
+                .frame(width: 6, height: 6)
+            Image(systemName: unavailable ? mutedSymbol : symbol)
+                .contentTransition(.symbolEffect(.replace))
+            Text(label)
+        }
+        .opacity(unavailable ? 0.5 : 1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(source == .microphone ? "Microphone level" : "System audio level")
+        .accessibilityValue(unavailable
+            ? Text("Not recording")
+            : Text(Double(level), format: .percent.precision(.fractionLength(0))))
     }
 }
 

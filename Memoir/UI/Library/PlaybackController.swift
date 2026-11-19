@@ -7,6 +7,8 @@ final class PlaybackController {
     private(set) var duration: TimeInterval = 0
     private(set) var isPlaying = false
     private(set) var isLoaded = false
+    /// Nil until the file has been analysed, which happens in the background.
+    private(set) var waveform: [Float]?
     /// Increases with every seek, so views can tell a deliberate jump apart from playback simply
     /// moving on (the transcript resumes following along on a jump).
     private(set) var seekGeneration = 0
@@ -19,6 +21,9 @@ final class PlaybackController {
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var statusObserver: NSKeyValueObservation?
     @ObservationIgnored private var isSeeking = false
+    @ObservationIgnored private var waveformTask: Task<Void, Never>?
+    /// Finished recordings don't change, so peaks are cached for the session.
+    @ObservationIgnored private static var waveformCache: [URL: [Float]] = [:]
 
     /// Fine enough that the transcript highlight lands within a tenth of a second of the audio.
     /// Only `currentTime` changes at this rate, and only views that read it re-render.
@@ -55,6 +60,16 @@ final class PlaybackController {
             guard failed else { return }
             Task { @MainActor in self?.itemDidFail() }
         }
+        if let cached = Self.waveformCache[url] {
+            waveform = cached
+        } else {
+            waveformTask = Task { [weak self] in
+                guard let peaks = await WaveformLoader.peaks(for: url), !Task.isCancelled else { return }
+                Self.waveformCache[url] = peaks
+                guard let self, self.player?.currentItem === item else { return }
+                self.waveform = peaks
+            }
+        }
         Task { [weak self] in
             // The stored duration can be zero or stale if the app quit mid-recording.
             guard let loaded = try? await item.asset.load(.duration), loaded.isNumeric else { return }
@@ -70,6 +85,9 @@ final class PlaybackController {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         player?.pause()
         player = nil
+        waveformTask?.cancel()
+        waveformTask = nil
+        waveform = nil
         timeObserver = nil
         endObserver = nil
         statusObserver = nil
@@ -142,6 +160,7 @@ final class PlaybackController {
         controller.isLoaded = true
         controller.duration = duration
         controller.currentTime = time
+        controller.waveform = WaveformLoader.preview
         if playing { controller.startPlaying() }
         return controller
     }

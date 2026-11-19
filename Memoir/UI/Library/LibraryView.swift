@@ -48,6 +48,11 @@ struct LibraryView: View {
         .environment(\.meetingCommands, commands)
         .onAppear(perform: applyPendingSelection)
         .onChange(of: model.librarySelection) { applyPendingSelection() }
+        .onChange(of: model.libraryAskRequested, initial: true) { _, requested in
+            guard requested else { return }
+            section = .ask
+            model.libraryAskRequested = false
+        }
         .onChange(of: meetingsLayout) { _, layout in
             if layout == .calendar { revealSelectionInCalendar() }
         }
@@ -136,10 +141,8 @@ struct LibraryView: View {
     private var placeholderToolbar: some ToolbarContent {
         ToolbarItemGroup {
             Group {
-                Button("Export", systemImage: "square.and.arrow.down") {}
                 Button("Share", systemImage: "square.and.arrow.up") {}
-                Button("Reveal in Finder", systemImage: "folder") {}
-                Button("Delete", systemImage: "trash") {}
+                Button("More", systemImage: "ellipsis") {}
             }
             .disabled(true)
         }

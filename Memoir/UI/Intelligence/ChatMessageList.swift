@@ -21,16 +21,23 @@ struct ChatMessageList: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
                 ForEach(messages) { message in
+                    // The saved answer replaces the streamed row in the same update, with the same text.
+                    // Animating both would show the answer twice for a moment.
                     ChatMessageRow(role: message.role, text: message.text, onSeek: onSeek)
+                        .transition(message.role == .user ? AnyTransition(.blurReplace) : .identity)
                 }
                 if let streamingText {
                     if streamingText.isEmpty {
                         ThinkingIndicator()
+                            .transition(.blurReplace)
                     } else {
                         ChatMessageRow(role: .assistant, text: streamingText, onSeek: onSeek)
+                            .transition(AnyTransition.asymmetric(insertion: AnyTransition(.blurReplace), removal: .identity))
                     }
                 }
             }
+            .animation(.smooth(duration: 0.35), value: messages.count)
+            .animation(.smooth(duration: 0.35), value: streamingText?.isEmpty)
             .frame(maxWidth: 680, alignment: .leading)
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
@@ -104,11 +111,7 @@ private struct ChatMessageRow: View {
 
 private struct ThinkingIndicator: View {
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text("Thinking...").foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
+        IntelligenceActivity("Thinking...")
     }
 }
 

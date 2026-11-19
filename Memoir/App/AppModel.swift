@@ -21,6 +21,12 @@ final class AppModel {
         var error: String?
     }
 
+    /// Shown in the menu bar for a while after a recording stops.
+    struct FinishedRecording: Equatable {
+        let meetingID: UUID
+        let date: Date
+    }
+
     enum WindowID {
         static let library = "library"
         static let onboarding = "onboarding"
@@ -48,6 +54,9 @@ final class AppModel {
 
     /// Meeting the Library should select when it opens or comes forward.
     var librarySelection: UUID?
+    /// Set when a question was asked from the menu bar, so the Library opens on Ask Memoir.
+    var libraryAskRequested = false
+    private(set) var lastRecording: FinishedRecording?
     /// Installed by the menu bar label, the one view that is alive for the whole app lifetime.
     @ObservationIgnored var openWindow: ((String) -> Void)?
 
@@ -135,6 +144,7 @@ final class AppModel {
         guard recordingState == .idle else { return }
         recordingState = .starting
         errorMessage = nil
+        lastRecording = nil
         services.hints.hide()
 
         let event = suggestion?.event ?? (services.calendar.hasAccess ? services.calendar.current() : nil)
@@ -219,6 +229,7 @@ final class AppModel {
             meeting.hasAudio = output.audioURL != nil
             meeting.status = .ready
             try? context.save()
+            lastRecording = FinishedRecording(meetingID: meetingID, date: .now)
             if settings.autoSummarize, !meeting.segments.isEmpty {
                 Task { await summarize(meeting) }
             }
@@ -385,12 +396,21 @@ final class AppModel {
         meeting.hasCustomTitle = true
     }
 
+    func toggleActionItem(_ task: String, in meeting: Meeting) {
+        if let index = meeting.completedActionItems.firstIndex(of: task) {
+            meeting.completedActionItems.remove(at: index)
+        } else {
+            meeting.completedActionItems.append(task)
+        }
+    }
+
     func delete(_ meeting: Meeting) {
         guard recordingMeetingID != meeting.id else { return }
         let id = meeting.id
         chats[.meeting(id)] = nil
         summaryActivity[id] = nil
         if librarySelection == id { librarySelection = nil }
+        if lastRecording?.meetingID == id { lastRecording = nil }
         context.delete(meeting)
         try? context.save()
         try? FileManager.default.removeItem(at: RecordingFiles.folder(for: id))
@@ -401,6 +421,23 @@ final class AppModel {
         let controller = ChatController(scope: scope, model: self, corpus: corpus)
         chats[scope] = controller
         return controller
+    }
+
+    func dismissLastRecording() {
+        lastRecording = nil
+    }
+
+    /// Takes the title and attendees from the event and passes the names to the transcriber.
+    func startRecording(event: CalendarMeeting, appName: String?, bundleID: String?) async {
+        await startRecording(from: MeetingSuggestion(kind: .start, appName: appName, bundleID: bundleID, event: event))
+    }
+
+    func ask(_ question: String) {
+        let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        chat(for: .library).send(question)
+        libraryAskRequested = true
+        openLibrary()
     }
 
     func openLibrary(selecting meetingID: UUID? = nil) {
@@ -455,6 +492,19 @@ extension AppModel {
     /// For the transitional states that have no data of their own.
     func simulate(_ state: RecordingState) {
         recordingState = state
+    }
+
+    func simulateTranscribing(_ meeting: Meeting) {
+        retranscribing.insert(meeting.id)
+    }
+
+    func simulateUpcoming(_ event: CalendarMeeting?) {
+        upcomingMeeting = event
+    }
+
+    func simulateFinished(_ meeting: Meeting, summarizing: Bool = false) {
+        lastRecording = FinishedRecording(meetingID: meeting.id, date: .now.addingTimeInterval(-40))
+        if summarizing { summaryActivity[meeting.id] = SummaryActivity() }
     }
 }
 #endif
