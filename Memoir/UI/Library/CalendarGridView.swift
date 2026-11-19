@@ -35,7 +35,14 @@ struct CalendarGridView: View {
     @Binding var selectedDay: Date
 
     @Environment(\.calendar) private var calendar
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var visibleMonth = Date.now
+    @Namespace private var selectionNamespace
+
+    /// The selection highlight glides between days; with Reduce Motion it just jumps.
+    private var selectionAnimation: Animation? {
+        reduceMotion ? nil : .snappy(duration: 0.2)
+    }
 
     private var counts: [Date: Int] {
         Dictionary(meetings.map { (calendar.startOfDay(for: $0.startDate), 1) }, uniquingKeysWith: +)
@@ -64,7 +71,8 @@ struct CalendarGridView: View {
                                 inMonth: calendar.isDate(day, equalTo: grid.month, toGranularity: .month),
                                 isToday: calendar.isDateInToday(day),
                                 isSelected: calendar.isDate(day, inSameDayAs: selectedDay),
-                                count: counts[calendar.startOfDay(for: day)] ?? 0
+                                count: counts[calendar.startOfDay(for: day)] ?? 0,
+                                selectionNamespace: selectionNamespace
                             ) {
                                 selectedDay = calendar.startOfDay(for: day)
                             }
@@ -74,6 +82,7 @@ struct CalendarGridView: View {
             }
             .focusable()
             .onMoveCommand(perform: move)
+            .animation(selectionAnimation, value: selectedDay)
         }
         .padding(12)
         .onAppear { visibleMonth = selectedDay }
@@ -86,21 +95,30 @@ struct CalendarGridView: View {
         HStack {
             Text(grid.month, format: .dateTime.month(.wide).year())
                 .font(.title3.weight(.semibold))
+                .contentTransition(.numericText())
             Spacer()
             Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
-                .accessibilityLabel("Previous month")
+                .accessibilityLabel("Previous Month")
+                .help("Previous Month")
             Button("Today") {
-                selectedDay = calendar.startOfDay(for: .now)
-                visibleMonth = .now
+                withAnimation(selectionAnimation) {
+                    selectedDay = calendar.startOfDay(for: .now)
+                    visibleMonth = .now
+                }
             }
+            .disabled(calendar.isDateInToday(selectedDay) && calendar.isDate(visibleMonth, equalTo: .now, toGranularity: .month))
+            .help("Go to Today")
             Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
-                .accessibilityLabel("Next month")
+                .accessibilityLabel("Next Month")
+                .help("Next Month")
         }
         .buttonStyle(.borderless)
     }
 
     private func shiftMonth(_ delta: Int) {
-        visibleMonth = calendar.date(byAdding: .month, value: delta, to: visibleMonth) ?? visibleMonth
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+            visibleMonth = calendar.date(byAdding: .month, value: delta, to: visibleMonth) ?? visibleMonth
+        }
     }
 
     private func move(_ direction: MoveCommandDirection) {
@@ -124,6 +142,7 @@ private struct DayCell: View {
     let isToday: Bool
     let isSelected: Bool
     let count: Int
+    let selectionNamespace: Namespace.ID
     let action: () -> Void
 
     @Environment(\.calendar) private var calendar
@@ -141,7 +160,14 @@ private struct DayCell: View {
                     .frame(width: 5, height: 5)
             }
             .frame(maxWidth: .infinity, minHeight: 40)
-            .background(isSelected ? AnyShapeStyle(.selection.opacity(0.35)) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 8))
+            .background {
+                // One shared highlight that moves between cells instead of fading per cell.
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.selection.opacity(0.35))
+                        .matchedGeometryEffect(id: "selection", in: selectionNamespace)
+                }
+            }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

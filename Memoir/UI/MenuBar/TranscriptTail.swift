@@ -23,6 +23,7 @@ struct TranscriptTail: View {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(tail) { line in
                                 entry(speaker: line.speaker, text: line.text, secondary: false)
+                                    .transition(.opacity.combined(with: .offset(y: 6)))
                             }
                             ForEach(pending, id: \.0) { speaker, text in
                                 entry(speaker: speaker, text: text, secondary: true)
@@ -32,6 +33,12 @@ struct TranscriptTail: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .scrollIndicators(.hidden)
+                    .mask(
+                        LinearGradient(
+                            stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.2)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
                     .onChange(of: lines.count) { scrollToEnd(proxy) }
                     .onChange(of: volatile) { scrollToEnd(proxy) }
                     .onAppear { proxy.scrollTo("end", anchor: .bottom) }
@@ -41,7 +48,8 @@ struct TranscriptTail: View {
         .font(.callout)
         .frame(height: 96)
         .padding(10)
-        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 10))
+        .background(.primary.opacity(0.05), in: .rect(cornerRadius: 12, style: .continuous))
+        .animation(.smooth(duration: 0.3), value: lines.count)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Live transcript")
     }
@@ -66,9 +74,9 @@ struct TranscriptTail: View {
         ],
         volatile: [.me: "Great, so the first one is"]
     )
-    .padding().frame(width: 340)
+    .padding().frame(width: 320)
 }
 
 #Preview("Empty") {
-    TranscriptTail(lines: [], volatile: [:]).padding().frame(width: 340)
+    TranscriptTail(lines: [], volatile: [:]).padding().frame(width: 320)
 }

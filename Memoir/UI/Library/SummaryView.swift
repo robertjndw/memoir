@@ -137,19 +137,41 @@ struct SummaryPane: View {
 
     private func actions(for summary: MeetingSummary) -> some View {
         HStack(spacing: 10) {
-            Button {
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(summary.markdown, forType: .string)
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-            }
+            CopyButton(text: summary.markdown)
             Button(action: summarize) {
                 Label("Regenerate", systemImage: "arrow.clockwise")
             }
             .disabled(availability != .available || !hasTranscript)
         }
         .controlSize(.regular)
+    }
+}
+
+/// Copies the summary and briefly confirms it in place, since the pasteboard gives no feedback of its own.
+private struct CopyButton: View {
+    let text: String
+
+    @State private var didCopy = false
+    @State private var resetTask: Task<Void, Never>?
+
+    var body: some View {
+        Button {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            didCopy = true
+            resetTask?.cancel()
+            resetTask = Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { return }
+                didCopy = false
+            }
+        } label: {
+            Label(didCopy ? "Copied" : "Copy", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .animation(.smooth(duration: 0.2), value: didCopy)
+        .onDisappear { resetTask?.cancel() }
     }
 }
 

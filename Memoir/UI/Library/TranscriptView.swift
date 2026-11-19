@@ -89,118 +89,14 @@ struct TranscriptView: View {
     // MARK: - Transcript
 
     private func transcript(lines: [TranscriptLine], matches: [UUID]) -> some View {
-        let current = playback.isLoaded && !isLive ? TranscriptGrouping.currentLineID(in: lines, at: playback.currentTime) : nil
-        let highlight = playback.currentTime > 0 || playback.isPlaying
-        let focusedMatch = matches.isEmpty ? nil : matches[min(matchPosition, matches.count - 1)]
-
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(TranscriptGrouping.blocks(lines)) { block in
-                        TranscriptBlockView(
-                            block: block,
-                            query: query,
-                            currentLineID: highlight ? current : nil,
-                            canSeek: playback.isLoaded,
-                            onSeek: { playback.seek(to: $0, play: true) }
-                        )
-                    }
-                    if isLive {
-                        livePreview
-                        Color.clear.frame(height: 1).id(Self.endID)
-                    }
-                }
-                .padding(16)
-            }
-            .onChange(of: current) { _, id in
-                guard playback.isPlaying, let id else { return }
-                withAnimation { proxy.scrollTo(id, anchor: .center) }
-            }
-            .onChange(of: focusedMatch) { _, id in
-                guard let id else { return }
-                withAnimation { proxy.scrollTo(id, anchor: .center) }
-            }
-            .onChange(of: lines.count) {
-                guard isLive else { return }
-                proxy.scrollTo(Self.endID, anchor: .bottom)
-            }
-        }
-    }
-
-    private static let endID = "transcript-end"
-
-    @ViewBuilder
-    private var livePreview: some View {
-        ForEach(Speaker.allCases.filter { model.volatileText[$0]?.isEmpty == false }, id: \.self) { speaker in
-            VStack(alignment: .leading, spacing: 2) {
-                Text(speaker.label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(TranscriptBlockView.tint(for: speaker))
-                Text(model.volatileText[speaker] ?? "")
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-        }
-    }
-}
-
-private struct TranscriptBlockView: View {
-    let block: TranscriptBlock
-    let query: String
-    let currentLineID: UUID?
-    let canSeek: Bool
-    let onSeek: (TimeInterval) -> Void
-
-    static func tint(for speaker: Speaker) -> Color {
-        speaker == .me ? .accentColor : .secondary
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(block.speaker.label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Self.tint(for: block.speaker))
-                Text(LibraryFormat.timecode(block.start))
-                    .font(.subheadline)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-
-            ForEach(block.lines) { line in
-                Text(highlighted(line.text))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 3)
-                    .padding(.horizontal, 6)
-                    .background(
-                        line.id == currentLineID ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear),
-                        in: .rect(cornerRadius: 6)
-                    )
-                    .contentShape(.rect)
-                    .onTapGesture {
-                        if canSeek { onSeek(line.start) }
-                    }
-                    .accessibilityHint(canSeek ? "Plays the recording from here" : "")
-                    .id(line.id)
-            }
-        }
-    }
-
-    private func highlighted(_ text: String) -> AttributedString {
-        var result = AttributedString(text)
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return result }
-        var searchRange = text.startIndex..<text.endIndex
-        while let found = text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange) {
-            if let lower = AttributedString.Index(found.lowerBound, within: result),
-               let upper = AttributedString.Index(found.upperBound, within: result) {
-                result[lower..<upper].backgroundColor = .yellow.opacity(0.5)
-            }
-            searchRange = found.upperBound..<text.endIndex
-        }
-        return result
+        TranscriptScroller(
+            lines: lines,
+            rows: TranscriptGrouping.rows(lines),
+            query: query,
+            focusedMatch: matches.isEmpty ? nil : matches[min(matchPosition, matches.count - 1)],
+            isLive: isLive,
+            playback: playback
+        )
     }
 }
 
@@ -216,6 +112,15 @@ private struct TranscriptBlockView: View {
 #Preview("Playing") {
     @Previewable @State var model = AppModel.preview(samples: true)
     @Previewable @State var playback = PlaybackController.preview(at: 18, of: 42 * 60, playing: true)
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback)
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Paused") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    @Previewable @State var playback = PlaybackController.preview(at: 18, of: 42 * 60)
     TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback)
         .environment(model)
         .modelContainer(model.container)

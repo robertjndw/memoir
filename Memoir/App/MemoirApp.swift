@@ -121,9 +121,12 @@ extension View {
 struct MenuBarLabel: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Status items are rendered as templates, so state is carried by the glyph and motion, not colour.
         Image(systemName: model.isRecording ? "record.circle.fill" : "waveform")
+            .symbolEffect(.pulse, options: .repeating, isActive: model.isRecording && !reduceMotion)
             .accessibilityLabel(model.isRecording ? "Memoir, recording" : "Memoir")
             .onAppear {
                 model.openWindow = { id in openWindow(id: id) }

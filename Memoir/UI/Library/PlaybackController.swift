@@ -7,6 +7,9 @@ final class PlaybackController {
     private(set) var duration: TimeInterval = 0
     private(set) var isPlaying = false
     private(set) var isLoaded = false
+    /// Increases with every seek, so views can tell a deliberate jump apart from playback simply
+    /// moving on (the transcript resumes following along on a jump).
+    private(set) var seekGeneration = 0
     var rate: Float = 1 {
         didSet { if isPlaying { player?.rate = rate } }
     }
@@ -14,6 +17,12 @@ final class PlaybackController {
     @ObservationIgnored private var player: AVPlayer?
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
+    @ObservationIgnored private var statusObserver: NSKeyValueObservation?
+    @ObservationIgnored private var isSeeking = false
+
+    /// Fine enough that the transcript highlight lands within a tenth of a second of the audio.
+    /// Only `currentTime` changes at this rate, and only views that read it re-render.
+    private static let tickInterval = CMTime(value: 1, timescale: 10)
 
     func load(url: URL, fallbackDuration: TimeInterval) {
         unload()
@@ -24,11 +33,11 @@ final class PlaybackController {
         duration = fallbackDuration
         isLoaded = true
 
-        timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
-        ) { [weak self] time in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: Self.tickInterval, queue: .main) { [weak self] time in
             MainActor.assumeIsolated {
-                guard let self, self.player != nil else { return }
+                // Ticks that arrive while a seek is in flight still report the old position and
+                // would briefly snap the transcript highlight back.
+                guard let self, self.player != nil, !self.isSeeking else { return }
                 self.currentTime = max(0, time.seconds)
             }
         }
@@ -39,6 +48,12 @@ final class PlaybackController {
                 self?.isPlaying = false
                 self?.currentTime = self?.duration ?? 0
             }
+        }
+        statusObserver = item.observe(\.status) { [weak self] item, _ in
+            // KVO can call back on any thread, so only the Sendable status crosses over.
+            let failed = item.status == .failed
+            guard failed else { return }
+            Task { @MainActor in self?.itemDidFail() }
         }
         Task { [weak self] in
             // The stored duration can be zero or stale if the app quit mid-recording.
@@ -57,21 +72,25 @@ final class PlaybackController {
         player = nil
         timeObserver = nil
         endObserver = nil
+        statusObserver = nil
+        isSeeking = false
         isPlaying = false
         isLoaded = false
         currentTime = 0
         duration = 0
+        #if DEBUG
+        previewClock?.cancel()
+        #endif
     }
 
     func togglePlayback() {
-        guard let player else { return }
+        guard isLoaded else { return }
         if isPlaying {
-            player.pause()
+            player?.pause()
             isPlaying = false
         } else {
             if duration > 0, currentTime >= duration - 0.1 { seek(to: 0) }
-            player.rate = rate
-            isPlaying = true
+            startPlaying()
         }
     }
 
@@ -79,27 +98,64 @@ final class PlaybackController {
         seek(to: currentTime + seconds)
     }
 
+    func seek(to time: TimeInterval, play: Bool = false) {
+        guard isLoaded else { return }
+        let upper = duration > 0 ? duration : time
+        let target = min(max(0, time), upper)
+        currentTime = target
+        seekGeneration += 1
+        if let player {
+            let generation = seekGeneration
+            isSeeking = true
+            Task {
+                // AVPlayer always calls back, with false when interrupted or when the item can't
+                // seek. Either way this seek is over, unless a newer one has taken the flag.
+                _ = await player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                if generation == self.seekGeneration { self.isSeeking = false }
+            }
+        }
+        if play, !isPlaying { startPlaying() }
+    }
+
+    /// A failed item never seeks or ticks again, so nothing would otherwise reset this state.
+    private func itemDidFail() {
+        guard player?.currentItem?.status == .failed else { return }
+        isSeeking = false
+        isPlaying = false
+    }
+
+    private func startPlaying() {
+        player?.rate = rate
+        isPlaying = true
+        #if DEBUG
+        if player == nil { runPreviewClock() }
+        #endif
+    }
+
     #if DEBUG
+    @ObservationIgnored private var previewClock: Task<Void, Never>?
+
     /// Looks loaded but has no player, so previews get enabled controls without an audio file.
+    /// While "playing" the time advances on its own, so previews show the transcript following along.
     static func preview(at time: TimeInterval, of duration: TimeInterval, playing: Bool = false) -> PlaybackController {
         let controller = PlaybackController()
         controller.isLoaded = true
         controller.duration = duration
         controller.currentTime = time
-        controller.isPlaying = playing
+        if playing { controller.startPlaying() }
         return controller
     }
-    #endif
 
-    func seek(to time: TimeInterval, play: Bool = false) {
-        guard let player else { return }
-        let upper = duration > 0 ? duration : time
-        let target = min(max(0, time), upper)
-        currentTime = target
-        Task { await player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) }
-        if play, !isPlaying {
-            player.rate = rate
-            isPlaying = true
+    private func runPreviewClock() {
+        previewClock?.cancel()
+        previewClock = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self, self.isPlaying, self.player == nil else { return }
+                self.currentTime = min(self.currentTime + 0.1 * Double(self.rate), self.duration)
+                if self.currentTime >= self.duration { self.isPlaying = false }
+            }
         }
     }
+    #endif
 }

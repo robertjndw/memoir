@@ -7,15 +7,34 @@ struct MeetingDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.meetingCommands) private var commands
     @State private var playback = PlaybackController()
-    @State private var tab: Tab = .summary
+    @State private var tab: Tab
     @State private var titleDraft = ""
     @FocusState private var titleFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Tab: String, CaseIterable, Identifiable {
         case summary = "Summary"
         case transcript = "Transcript"
         case chat = "Chat"
         var id: Self { self }
+
+        var shortcut: KeyEquivalent {
+            switch self {
+            case .summary: "1"
+            case .transcript: "2"
+            case .chat: "3"
+            }
+        }
+    }
+
+    /// `initialTab` overrides the default, which is the live transcript while recording.
+    init(meeting: Meeting, initialTab: Tab? = nil) {
+        self.meeting = meeting
+        _titleDraft = State(initialValue: meeting.title)
+        // Decided here rather than in `.task` so the first frame already shows the right tab.
+        // The environment isn't readable yet, so the persisted status stands in for
+        // `model.recordingMeetingID`; interrupted recordings are reset to ready at launch.
+        _tab = State(initialValue: initialTab ?? (meeting.status == .recording ? .transcript : .summary))
     }
 
     private var isRecording: Bool { model.recordingMeetingID == meeting.id }
@@ -23,27 +42,30 @@ struct MeetingDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Picker("View", selection: $tab) {
-                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 360)
-            .padding(.bottom, 10)
             Divider()
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            ZStack {
+                content
+                    .id(tab)
+                    .transition(.opacity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // A short crossfade only, which is fine with Reduce Motion as nothing moves.
+            .animation(.easeInOut(duration: 0.15), value: tab)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if meeting.audioURL != nil, !isRecording {
+        .background { tabShortcuts }
+        // A safe area bar rather than an inset, so scrolling content softly fades out under the
+        // player instead of ending at a hard line.
+        .safeAreaBar(edge: .bottom, spacing: 0) {
+            // The chat has its own composer at the bottom edge, and two stacked bars crowd it.
+            if meeting.audioURL != nil, !isRecording, tab != .chat {
                 PlaybackBar(playback: playback)
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.15), value: tab == .chat)
         .toolbar { toolbar }
         .navigationTitle(meeting.title)
         .task(id: meeting.id) {
-            titleDraft = meeting.title
-            tab = isRecording ? .transcript : .summary
             if let url = meeting.audioURL, !isRecording {
                 playback.load(url: url, fallbackDuration: meeting.duration)
             }
@@ -76,13 +98,17 @@ struct MeetingDetailView: View {
                 if isRecording {
                     Label("Recording", systemImage: "record.circle.fill")
                         .foregroundStyle(.red)
+                        .symbolEffect(.pulse, isActive: !reduceMotion)
+                        .transition(.opacity)
                 }
                 Text(meeting.startDate, format: .dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
                 if !isRecording, meeting.duration > 0 {
                     Text("\u{00B7} \(LibraryFormat.length(meeting.duration))")
+                        .transition(.opacity)
                 }
             }
             .foregroundStyle(.secondary)
+            .animation(.smooth(duration: 0.25), value: isRecording)
             if !meeting.attendees.isEmpty {
                 Text(meeting.attendees.formatted(.list(type: .and, width: .narrow)))
                     .foregroundStyle(.secondary)
@@ -93,7 +119,7 @@ struct MeetingDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
         .padding(.top, 16)
-        .padding(.bottom, 12)
+        .padding(.bottom, 14)
     }
 
     private func commitTitle() {
@@ -118,10 +144,35 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Segmented controls can't carry per-segment shortcuts, so Command-1/2/3 come from invisible
+    /// buttons. They stay in the hierarchy (not `.hidden()`) so their shortcuts remain registered.
+    private var tabShortcuts: some View {
+        ZStack {
+            ForEach(Tab.allCases) { item in
+                Button(item.rawValue) { tab = item }
+                    .keyboardShortcut(item.shortcut, modifiers: .command)
+            }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        // In the toolbar the segmented control picks up the system glass treatment.
+        ToolbarItem(placement: .principal) {
+            Picker("View", selection: $tab) {
+                ForEach(Tab.allCases) { Text(LocalizedStringKey($0.rawValue)).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .help("Switch between summary, transcript and chat (Command-1, 2, 3)")
+        }
+
         ToolbarItemGroup {
             Button { commands.export(meeting) } label: {
                 Label("Export", systemImage: "square.and.arrow.down")
@@ -145,7 +196,6 @@ struct MeetingDetailView: View {
             Button { commands.delete(meeting) } label: {
                 Label("Delete", systemImage: "trash")
             }
-            .keyboardShortcut(.delete, modifiers: .command)
             .disabled(isRecording)
             .help("Delete Meeting")
         }
@@ -164,6 +214,23 @@ struct MeetingDetailView: View {
 #Preview("Not summarized") {
     @Previewable @State var model = AppModel.preview(samples: true)
     NavigationStack { MeetingDetailView(meeting: model.previewMeeting("Call at 9:15 AM")) }
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 760, height: 640)
+}
+
+#Preview("Chat") {
+    @Previewable @State var model = AppModel.preview(samples: true) { model in
+        let meeting = model.previewMeeting("Design Review")
+        model.context.insert(ChatMessage(role: .user, text: "When do we launch?", meeting: meeting))
+        model.context.insert(ChatMessage(
+            role: .assistant,
+            text: "On **the first Monday of next month** [0:31].",
+            date: .now.addingTimeInterval(1),
+            meeting: meeting
+        ))
+    }
+    NavigationStack { MeetingDetailView(meeting: model.previewMeeting("Design Review"), initialTab: .chat) }
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 760, height: 640)

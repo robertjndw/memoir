@@ -5,14 +5,16 @@ struct IdleView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             Button {
                 Task { await model.startRecording() }
             } label: {
-                Label("Record", systemImage: "record.circle")
+                Label("Start Recording", systemImage: "record.circle")
+                    .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.glassProminent)
+            .tint(.red)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .accessibilityLabel("Start recording")
@@ -34,6 +36,7 @@ struct UpcomingRow: View {
         HStack(spacing: 8) {
             Image(systemName: "calendar")
                 .foregroundStyle(.secondary)
+                .frame(width: 18)
                 .accessibilityHidden(true)
             Text(title).lineLimit(1)
             Spacer(minLength: 8)
@@ -44,6 +47,7 @@ struct UpcomingRow: View {
             }
         }
         .font(.callout)
+        .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
     }
 
@@ -68,16 +72,14 @@ struct RecentMeetings: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Recent")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
-                .accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: 2) {
+            MenuSectionHeader("Recent")
 
             if meetings.isEmpty {
                 Text("Your recordings will appear here.")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 4)
             } else {
                 VStack(spacing: 0) {
@@ -97,7 +99,6 @@ struct RecentRow: View {
     let date: Date
     let duration: TimeInterval
     let action: () -> Void
-    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
@@ -110,17 +111,12 @@ struct RecentRow: View {
                 }
                 Spacer(minLength: 8)
                 Text(Duration.seconds(duration).formatted(.time(pattern: duration >= 3600 ? .hourMinute : .minuteSecond)))
-                    .font(.caption)
+                    .font(.callout)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            .contentShape(.rect)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 6))
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .buttonStyle(MenuRowStyle())
         .accessibilityLabel("\(title), \(date.formatted(date: .abbreviated, time: .shortened))")
         .accessibilityHint("Opens in Library")
     }
@@ -144,5 +140,5 @@ struct RecentRow: View {
         RecentRow(title: "All Hands", date: .now.addingTimeInterval(-86400), duration: 75 * 60) {}
     }
     .padding()
-    .frame(width: 340)
+    .frame(width: 320)
 }

@@ -4,7 +4,6 @@ import SwiftUI
 
 enum LibrarySection: String, CaseIterable, Identifiable {
     case meetings = "Meetings"
-    case calendar = "Calendar"
     case ask = "Ask Memoir"
 
     var id: Self { self }
@@ -12,7 +11,6 @@ enum LibrarySection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .meetings: "waveform"
-        case .calendar: "calendar"
         case .ask: "sparkles"
         }
     }
@@ -24,6 +22,7 @@ struct LibraryView: View {
     @Query(sort: \Meeting.startDate, order: .reverse) private var meetings: [Meeting]
 
     @State private var section: LibrarySection = .meetings
+    @AppStorage("meetingsLayout") private var meetingsLayout: MeetingsLayout = .list
     @State private var selectedID: UUID?
     @State private var searchText = ""
     @State private var selectedDay = Date.now
@@ -49,6 +48,9 @@ struct LibraryView: View {
         .environment(\.meetingCommands, commands)
         .onAppear(perform: applyPendingSelection)
         .onChange(of: model.librarySelection) { applyPendingSelection() }
+        .onChange(of: meetingsLayout) { _, layout in
+            if layout == .calendar { revealSelectionInCalendar() }
+        }
         .onChange(of: meetings.map(\.id)) { _, ids in
             if let selectedID, !ids.contains(selectedID) { self.selectedID = nil }
         }
@@ -97,9 +99,13 @@ struct LibraryView: View {
     private var contentColumn: some View {
         switch section {
         case .meetings:
-            MeetingListView(meetings: meetings, selection: $selectedID, searchText: $searchText)
-        case .calendar:
-            CalendarPane(meetings: meetings, selection: $selectedID, selectedDay: $selectedDay)
+            MeetingsColumn(
+                meetings: meetings,
+                layout: $meetingsLayout,
+                selection: $selectedID,
+                searchText: $searchText,
+                selectedDay: $selectedDay
+            )
         case .ask:
             ContentUnavailableView(
                 "Ask Memoir",
@@ -119,6 +125,23 @@ struct LibraryView: View {
                 .id(meeting.id)
         } else {
             ContentUnavailableView("No Meeting Selected", systemImage: "waveform", description: Text("Choose a meeting to see its summary and transcript."))
+                .toolbar { placeholderToolbar }
+        }
+    }
+
+    /// Mirrors the meeting actions in a disabled state, like Mail does with no message selected.
+    /// Without any detail items the window has no toolbar section for this column, so the
+    /// content column's items get pushed to the trailing edge until a meeting is opened.
+    @ToolbarContentBuilder
+    private var placeholderToolbar: some ToolbarContent {
+        ToolbarItemGroup {
+            Group {
+                Button("Export", systemImage: "square.and.arrow.down") {}
+                Button("Share", systemImage: "square.and.arrow.up") {}
+                Button("Reveal in Finder", systemImage: "folder") {}
+                Button("Delete", systemImage: "trash") {}
+            }
+            .disabled(true)
         }
     }
 
@@ -157,7 +180,16 @@ struct LibraryView: View {
         section = .meetings
         searchText = ""
         selectedID = id
+        if meetingsLayout == .calendar { revealSelectionInCalendar() }
         model.librarySelection = nil
+    }
+
+    /// Moves the calendar to the selected meeting's day, so the highlighted row is actually on screen.
+    private func revealSelectionInCalendar() {
+        guard let selectedID else { return }
+        // A recording that just started may not have reached the query yet, and it is today's.
+        let start = meetings.first(where: { $0.id == selectedID })?.startDate ?? .now
+        selectedDay = calendar.startOfDay(for: start)
     }
 }
 
@@ -175,6 +207,23 @@ struct LibraryView: View {
         $0.librarySelection = $0.previewMeeting("Design Review").id
     }
     LibraryView()
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 1080, height: 700)
+}
+
+// A private defaults suite so this layout choice doesn't leak into the other previews.
+#Preview("Selected meeting, calendar") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        $0.librarySelection = $0.previewMeeting("Design Review").id
+    }
+    let defaults: UserDefaults = {
+        let defaults = UserDefaults(suiteName: "MemoirPreview.CalendarLayout") ?? .standard
+        defaults.set(MeetingsLayout.calendar.rawValue, forKey: "meetingsLayout")
+        return defaults
+    }()
+    LibraryView()
+        .defaultAppStorage(defaults)
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 1080, height: 700)

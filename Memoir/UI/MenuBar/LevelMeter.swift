@@ -9,17 +9,19 @@ struct LevelMeter: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
+                .font(.callout)
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .frame(width: 18)
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.quaternary)
+                    Capsule().fill(.primary.opacity(0.1))
                     Capsule()
-                        .fill(.tint)
-                        .frame(width: max(4, proxy.size.width * CGFloat(min(max(level, 0), 1))))
+                        .fill(.primary.opacity(0.65))
+                        .frame(width: max(5, proxy.size.width * CGFloat(min(max(level, 0), 1))))
                 }
             }
-            .frame(height: 4)
+            .frame(height: 5)
+            // Levels arrive many times a second, so a short linear ramp reads smoother than a spring.
             .animation(.linear(duration: 0.08), value: level)
         }
         .accessibilityElement(children: .ignore)
@@ -34,5 +36,5 @@ struct LevelMeter: View {
         LevelMeter(symbol: "speaker.wave.2.fill", label: "System audio level", level: 0.2)
     }
     .padding()
-    .frame(width: 300)
+    .frame(width: 320)
 }

@@ -4,7 +4,8 @@ import SwiftUI
 struct MeetingListView: View {
     let meetings: [Meeting]
     @Binding var selection: UUID?
-    @Binding var searchText: String
+    /// Owned by `MeetingsColumn`, which also hosts the search field so it survives layout switches.
+    var searchText: String = ""
 
     @Environment(\.meetingCommands) private var commands
     @Environment(\.calendar) private var calendar
@@ -38,19 +39,16 @@ struct MeetingListView: View {
                 ContentUnavailableView.search(text: searchText)
             }
         }
-        .searchable(text: $searchText, prompt: "Search Meetings")
-        .navigationTitle("Meetings")
     }
 }
 
 #if DEBUG
 #Preview("Meetings") {
     @Previewable @State var selection: UUID?
-    @Previewable @State var search = ""
     @Previewable @State var model = AppModel.preview(samples: true)
     QueriedMeetings { meetings in
         NavigationStack {
-            MeetingListView(meetings: meetings, selection: $selection, searchText: $search)
+            MeetingListView(meetings: meetings, selection: $selection)
         }
     }
     .environment(model)
@@ -60,11 +58,10 @@ struct MeetingListView: View {
 
 #Preview("No search results") {
     @Previewable @State var selection: UUID?
-    @Previewable @State var search = "roadmap"
     @Previewable @State var model = AppModel.preview(samples: true)
     QueriedMeetings { meetings in
         NavigationStack {
-            MeetingListView(meetings: meetings, selection: $selection, searchText: $search)
+            MeetingListView(meetings: meetings, selection: $selection, searchText: "roadmap")
         }
     }
     .environment(model)
@@ -74,10 +71,9 @@ struct MeetingListView: View {
 
 #Preview("Empty") {
     @Previewable @State var selection: UUID?
-    @Previewable @State var search = ""
     @Previewable @State var model = AppModel.preview()
     NavigationStack {
-        MeetingListView(meetings: [], selection: $selection, searchText: $search)
+        MeetingListView(meetings: [], selection: $selection)
     }
     .environment(model)
     .frame(width: 360, height: 520)
