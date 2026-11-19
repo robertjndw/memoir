@@ -131,6 +131,9 @@ nonisolated enum RecordingFiles {
 
     static var storeURL: URL { baseDirectory.appending(path: "Memoir.store") }
 
+    /// Where the MCP server listens. The `memoir-mcp` bridge hardcodes the same path.
+    static var mcpSocketURL: URL { baseDirectory.appending(path: "mcp.sock") }
+
     static func folder(for meetingID: UUID) -> URL {
         baseDirectory
             .appending(path: "Recordings", directoryHint: .isDirectory)

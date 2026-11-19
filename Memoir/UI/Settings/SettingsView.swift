@@ -18,6 +18,9 @@ struct SettingsView: View {
             Tab("Intelligence", systemImage: "sparkles") {
                 IntelligencePane()
             }
+            Tab("AI Assistants", systemImage: "point.3.connected.trianglepath.dotted") {
+                AIAssistantsPane()
+            }
             Tab("Privacy", systemImage: "hand.raised") {
                 PrivacyPane(permissions: permissions)
             }
@@ -334,6 +337,146 @@ private struct IntelligencePane: View {
     }
 }
 
+// MARK: - AI Assistants
+
+private struct AIAssistantsPane: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var settings = model.settings
+        Form {
+            Section {
+                Toggle("Allow AI assistants to read your meetings", isOn: $settings.mcpEnabled)
+            } footer: {
+                Text("Lets Claude and other assistants search and read your meetings, summaries and transcripts. Anything they read is sent to the assistant's provider. They can't change anything.")
+            }
+
+            if settings.mcpEnabled {
+                Section("Status") {
+                    statusRow
+                    clientRows
+                }
+
+                Section {
+                    CommandRow(text: claudeCodeCommand)
+                } header: {
+                    Text("Claude Code")
+                } footer: {
+                    Text("Run this command in a terminal.")
+                }
+
+                Section {
+                    LabeledContent {
+                        CopyButton(text: claudeDesktopSnippet)
+                    } label: {
+                        Text("Configuration snippet")
+                        Text("Paste it into claude_desktop_config.json (merge with any existing mcpServers) and restart Claude Desktop.")
+                    }
+                    if FileManager.default.fileExists(atPath: Self.claudeDesktopFolder.path) {
+                        Button("Show Config Folder in Finder") {
+                            NSWorkspace.shared.open(Self.claudeDesktopFolder)
+                        }
+                    }
+                } header: {
+                    Text("Claude Desktop")
+                } footer: {
+                    Text("~/Library/Application Support/Claude/claude_desktop_config.json")
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private var statusRow: some View {
+        let server = model.mcpServer
+        if let error = server.lastError {
+            Label(error, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+        } else if server.isListening {
+            Label("Running", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        } else {
+            Label("Starting", systemImage: "clock.fill")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var clientRows: some View {
+        let clients = model.mcpServer.clients
+        if clients.isEmpty {
+            Text("No assistants connected")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(clients) { client in
+                LabeledContent {
+                    Text("connected \(client.connectedAt, style: .relative) ago")
+                        .foregroundStyle(.secondary)
+                } label: {
+                    Text(client.name)
+                }
+            }
+        }
+    }
+
+    private static var claudeDesktopFolder: URL {
+        URL.applicationSupportDirectory.appending(path: "Claude", directoryHint: .isDirectory)
+    }
+
+    private var bridgePath: String { MCPServer.bridgeURL.path }
+
+    /// Quoted because the app may live in a folder with spaces in its name.
+    private var claudeCodeCommand: String {
+        let quoted = bridgePath.contains(/[^A-Za-z0-9_\/.\-+@%:,=~]/)
+            ? "'" + bridgePath.replacing("'", with: "'\\''") + "'"
+            : bridgePath
+        return "claude mcp add --scope user memoir -- \(quoted)"
+    }
+
+    private var claudeDesktopSnippet: String {
+        let config = ["mcpServers": ["memoir": ["command": bridgePath]]]
+        let options: JSONSerialization.WritingOptions = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? JSONSerialization.data(withJSONObject: config, options: options) else { return "" }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+private struct CommandRow: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(text)
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            CopyButton(text: text)
+        }
+    }
+}
+
+private struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+        } label: {
+            Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+        }
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
+    }
+}
+
 // MARK: - Privacy
 
 private struct PrivacyPane: View {
@@ -426,5 +569,16 @@ private struct PermissionRow: View {
     @Previewable @State var model = AppModel.preview()
     SettingsView()
         .environment(model)
+}
+
+#Preview("AI Assistants") {
+    @Previewable @State var model: AppModel = {
+        let model = AppModel.preview()
+        model.settings.mcpEnabled = true
+        return model
+    }()
+    AIAssistantsPane()
+        .environment(model)
+        .frame(width: 560)
 }
 #endif

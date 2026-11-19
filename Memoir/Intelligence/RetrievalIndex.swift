@@ -80,12 +80,17 @@ actor RetrievalIndex {
 
     // MARK: Library search
 
+    /// `includeIDs` adds each meeting's id to its heading, for callers that look meetings up
+    /// afterwards. The on-device chat leaves it off: ids only cost it tokens.
     func searchLibrary(
         query: String,
         from: Date?,
         to: Date?,
         budget: Int,
-        estimator: TokenEstimator
+        estimator: TokenEstimator,
+        maxMeetings: Int = 4,
+        passagesPerMeeting: Int = 3,
+        includeIDs: Bool = false
     ) async -> String {
         let meetings = await digests().filter { Self.isInRange($0.date, from: from, to: to) }
         guard !meetings.isEmpty else { return "There are no recorded meetings in that date range." }
@@ -143,7 +148,7 @@ actor RetrievalIndex {
         let ranked = meetings
             .filter { (meetingScores[$0.id] ?? 0) >= threshold }
             .sorted { (meetingScores[$0.id] ?? 0) > (meetingScores[$1.id] ?? 0) }
-            .prefix(4)
+            .prefix(maxMeetings)
         guard !ranked.isEmpty else {
             return "No recorded meetings mention \"\(query)\"."
         }
@@ -152,7 +157,7 @@ actor RetrievalIndex {
         var remaining = budget - 20
         let perMeeting = max(120, remaining / ranked.count)
         for meeting in ranked {
-            var section = Self.meetingLine(meeting)
+            var section = Self.meetingLine(meeting, includeID: includeIDs)
             if let overview = meeting.summary?.overview, !overview.isEmpty {
                 section += "\nSummary: " + estimator.truncate(overview, toTokens: perMeeting / 3)
             }
@@ -160,7 +165,7 @@ actor RetrievalIndex {
             let windows = await windows(of: meeting.id)
             let passages = (bestWindows[meeting.id] ?? [])
                 .sorted { $0.score > $1.score }
-                .prefix(3)
+                .prefix(passagesPerMeeting)
                 .map { windows[$0.window].lines }
             let ranges = selectPassages(
                 hits: passages,
@@ -200,8 +205,9 @@ actor RetrievalIndex {
         return "\(meetings.count) meeting\(meetings.count == 1 ? "" : "s"), newest first:\n" + lines.joined(separator: "\n")
     }
 
-    nonisolated static func meetingLine(_ meeting: MeetingDigest) -> String {
-        "\"\(meeting.title)\" (\(Prompts.shortDate(meeting.date)), \(Prompts.durationText(meeting.duration)))"
+    nonisolated static func meetingLine(_ meeting: MeetingDigest, includeID: Bool = false) -> String {
+        let line = "\"\(meeting.title)\" (\(Prompts.shortDate(meeting.date)), \(Prompts.durationText(meeting.duration)))"
+        return includeID ? line + ", id \(meeting.id.uuidString)" : line
     }
 
     nonisolated static func isInRange(_ date: Date, from: Date?, to: Date?) -> Bool {

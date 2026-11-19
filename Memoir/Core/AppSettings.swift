@@ -12,11 +12,14 @@ final class AppSettings {
         static let mutedBundleIDs = "mutedBundleIDs"
         static let localeIdentifier = "localeIdentifier"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
+        static let mcpEnabled = "mcpEnabled"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
     /// Called after any detection-related setting changed.
     @ObservationIgnored var detectionChanged: (() -> Void)?
+    /// Called after `mcpEnabled` changed.
+    @ObservationIgnored var mcpEnabledChanged: (() -> Void)?
 
     var autoSummarize: Bool { didSet { defaults.set(autoSummarize, forKey: Key.autoSummarize) } }
     var detectMicrophoneApps: Bool {
@@ -39,6 +42,11 @@ final class AppSettings {
     var hasCompletedOnboarding: Bool {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Key.hasCompletedOnboarding) }
     }
+    /// Lets AI assistants read the library through the MCP server. Off by default because it
+    /// exposes every transcript to whatever client the user connects.
+    var mcpEnabled: Bool {
+        didSet { defaults.set(mcpEnabled, forKey: Key.mcpEnabled); mcpEnabledChanged?() }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -57,6 +65,7 @@ final class AppSettings {
         mutedBundleIDs = Set(defaults.stringArray(forKey: Key.mutedBundleIDs) ?? [])
         localeIdentifier = defaults.string(forKey: Key.localeIdentifier) ?? ""
         hasCompletedOnboarding = defaults.bool(forKey: Key.hasCompletedOnboarding)
+        mcpEnabled = defaults.bool(forKey: Key.mcpEnabled)
     }
 
     var transcriptionLocale: Locale {

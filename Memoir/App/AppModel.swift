@@ -35,6 +35,7 @@ final class AppModel {
     let settings: AppSettings
     let container: ModelContainer
     @ObservationIgnored let services: Services
+    let mcpServer: MCPServer
     var context: ModelContext { container.mainContext }
 
     private(set) var recordingState: RecordingState = .idle
@@ -73,6 +74,7 @@ final class AppModel {
         self.settings = settings
         self.container = container
         self.services = services
+        mcpServer = MCPServer(library: StoreCorpus(container: container))
         intelligenceAvailability = services.intelligence.availability
     }
 
@@ -97,6 +99,9 @@ final class AppModel {
         }
         services.detector.start(options: settings.detectionOptions)
 
+        settings.mcpEnabledChanged = { [weak self] in self?.updateMCPServer() }
+        updateMCPServer()
+
         let suggestions = services.detector.suggestions
         backgroundTasks.append(Task { [weak self] in
             for await suggestion in suggestions {
@@ -117,6 +122,14 @@ final class AppModel {
         upcomingMeeting = settings.detectCalendar && services.calendar.hasAccess
             ? services.calendar.next(within: 8 * 3600)
             : nil
+    }
+
+    private func updateMCPServer() {
+        if settings.mcpEnabled {
+            mcpServer.start()
+        } else {
+            mcpServer.stop()
+        }
     }
 
     private func closeInterruptedRecordings() {
@@ -509,9 +522,9 @@ extension AppModel {
 }
 #endif
 
-/// Read access to the store for chat retrieval, callable from any isolation.
+/// Read access to the store for chat retrieval and the MCP tools, callable from any isolation.
 @MainActor
-final class StoreCorpus: TranscriptCorpus {
+final class StoreCorpus: MeetingLibrary {
     private let container: ModelContainer
 
     init(container: ModelContainer) {
@@ -527,5 +540,11 @@ final class StoreCorpus: TranscriptCorpus {
         var descriptor = FetchDescriptor<Meeting>(predicate: #Predicate { $0.id == meetingID })
         descriptor.fetchLimit = 1
         return (try? container.mainContext.fetch(descriptor).first)?.sortedLines ?? []
+    }
+
+    @MainActor func completedActionItems(of meetingID: UUID) async -> Set<String> {
+        var descriptor = FetchDescriptor<Meeting>(predicate: #Predicate { $0.id == meetingID })
+        descriptor.fetchLimit = 1
+        return Set((try? container.mainContext.fetch(descriptor).first)?.completedActionItems ?? [])
     }
 }
