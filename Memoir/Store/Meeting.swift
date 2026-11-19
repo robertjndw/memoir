@@ -125,8 +125,16 @@ final class ChatMessage {
 
 nonisolated enum RecordingFiles {
     /// The app is not sandboxed, so this is the real ~/Library/Application Support/Memoir.
+    /// Debug builds use "Memoir Dev" so they can run next to the installed app. Sharing the
+    /// folder would mean two apps writing one store, and the MCP server unlinks any socket
+    /// already at its path, so the installed app would stop answering AI assistants.
     static var baseDirectory: URL {
-        URL.applicationSupportDirectory.appending(path: "Memoir", directoryHint: .isDirectory)
+        #if DEBUG
+        let folder = "Memoir Dev"
+        #else
+        let folder = "Memoir"
+        #endif
+        return URL.applicationSupportDirectory.appending(path: folder, directoryHint: .isDirectory)
     }
 
     static var storeURL: URL { baseDirectory.appending(path: "Memoir.store") }

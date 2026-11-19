@@ -1,0 +1,161 @@
+name: Release
+
+# Publishing a GitHub release (or prerelease) runs the tests, then builds Memoir
+# and attaches Memoir-<version>.dmg to it. Running the workflow by hand builds a
+# DMG as a workflow artifact instead, without touching any release.
+#
+# Signing is optional: with the Developer ID secrets set the DMG is signed and
+# notarized, without them it is signed ad-hoc. See docs/releasing.md.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dmg:
+    # The project uses the Xcode 27 project format, which the macos-26 images can't open.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    # Spelled out because only an explicit bash shell gets pipefail. Without it a failed
+    # build-dmg.sh piped into tail would let the step pass.
+    defaults:
+      run:
+        shell: bash
+    env:
+      XCODE_APP: /Applications/Xcode_27.2.app
+      HAS_DEVELOPER_ID: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
+      HAS_NOTARY_KEY: ${{ secrets.NOTARY_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            if [[ ! "$TAG" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)$ ]]; then
+              echo "::error::Tag $TAG is not a version like v1.2.3 or v1.2.3-beta.1"
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}"
+            if [[ "$PRERELEASE" == "true" && "$version" != *-* ]]; then
+              echo "::error::Prereleases need a suffix such as v$version-beta.1"
+              exit 1
+            fi
+            if [[ "$PRERELEASE" != "true" && "$version" == *-* ]]; then
+              echo "::error::$TAG has a prerelease suffix but is not marked as a prerelease"
+              exit 1
+            fi
+          else
+            version="0.0.0-dev.${{ github.run_number }}"
+          fi
+          {
+            echo "VERSION=$version"
+            # CFBundleVersion has to grow with every build, which the run number does.
+            echo "BUILD=${{ github.run_number }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
+      # A release that fails the tests gets no DMG. A run by hand skips them, since its DMG is
+      # only an artifact.
+      - name: Run the tests
+        if: github.event_name == 'release'
+        run: |
+          xcodebuild test \
+            -project Memoir.xcodeproj \
+            -scheme Memoir \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/test-derived \
+            -quiet
+
+      - name: Import the Developer ID certificate
+        if: env.HAS_DEVELOPER_ID == 'true'
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "$TEAM_ID" ]]; then
+            echo "::error::Set the APPLE_TEAM_ID repository variable, see docs/releasing.md"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          # Prepended so codesign finds the identity, without dropping the login keychain from the list.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/developer-id.p12"
+          {
+            echo "SIGNING_IDENTITY=Developer ID Application"
+            echo "DEVELOPMENT_TEAM=$TEAM_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Write the notary API key
+        if: env.HAS_DEVELOPER_ID == 'true' && env.HAS_NOTARY_KEY == 'true'
+        env:
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          echo "$NOTARY_API_KEY" > "$RUNNER_TEMP/notary.p8"
+          {
+            echo "NOTARY_KEY_PATH=$RUNNER_TEMP/notary.p8"
+            echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+
+      # build-dmg.sh runs dmgbuild through uvx.
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build the DMG
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/out
+        run: |
+          dmg="$(./scripts/build-dmg.sh "$VERSION" "$BUILD" | tail -n 1)"
+          echo "DMG=$dmg" >> "$GITHUB_ENV"
+          if [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
+            signed="Developer ID, notarized"
+          elif [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+            signed="Developer ID, not notarized"
+          else
+            signed="ad-hoc. macOS will block the first launch, see docs/releasing.md"
+            echo "::warning::The DMG is signed ad-hoc because the Developer ID secrets are not set."
+          fi
+          echo "Built \`$(basename "$dmg")\` ($signed)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach the DMG to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" "$DMG" --clobber
+
+      - name: Upload the DMG as an artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Memoir-${{ env.VERSION }}
+          path: ${{ env.DMG }}
+          if-no-files-found: error
+
+      - name: Clean up the signing keychain
+        if: always() && env.HAS_DEVELOPER_ID == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true

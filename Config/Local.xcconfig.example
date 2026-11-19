@@ -1,0 +1,11 @@
+// Copy to Config/Local.xcconfig (gitignored) to sign with your own Apple
+// Developer team. With an ad-hoc signature every rebuild looks like a new app to
+// macOS, so it asks for the microphone and system audio again. A stable
+// signature keeps those grants across rebuilds.
+
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM = ABCDE12345
+
+// An App ID belongs to a single team, so pick your own prefix.
+MEMOIR_BUNDLE_ID = com.example.Memoir

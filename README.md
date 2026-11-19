@@ -164,6 +164,17 @@ and each recording gets a folder under `Recordings/`.
 open Memoir.xcodeproj   # then build and run the Memoir scheme
 ```
 
+Debug builds run as a separate app, "Memoir Dev". It has its own bundle id
+(`de.jandow.Memoir.debug`) and settings, and keeps its data in
+`~/Library/Application Support/Memoir Dev`, so it can run next to the
+installed copy without touching its recordings or its MCP socket.
+
+The project signs ad-hoc by default, so it builds without an Apple Developer
+account. An ad-hoc signature changes with every build, though, and macOS then
+asks for the microphone and system audio again. To sign with your own team,
+copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (gitignored)
+and fill it in.
+
 Run the tests with <kbd>⌘</kbd><kbd>U</kbd> in Xcode or from the terminal:
 
 ```sh
@@ -203,3 +214,6 @@ Debug builds understand two launch arguments:
   clients launch. It ships inside the app bundle.
 - `MemoirTests` - unit tests.
 - `scripts/install.sh` - builds a Release copy and installs it.
+- `scripts/build-dmg.sh` - builds the DMG that releases ship, see
+  [docs/releasing.md](docs/releasing.md).
+- `Config` - `Info.plist` additions and the signing settings.

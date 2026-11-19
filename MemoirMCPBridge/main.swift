@@ -5,9 +5,13 @@ import AppKit
 import Foundation
 
 // Duplicates RecordingFiles.baseDirectory in the app on purpose: the bridge must
-// not link app code. Keep both in sync.
+// not link app code. Keep both in sync. The bridge is built in the same
+// configuration as the app that embeds it, so DEBUG matches the app's.
+#if DEBUG
+let socketPath = NSString(string: "~/Library/Application Support/Memoir Dev/mcp.sock").expandingTildeInPath
+#else
 let socketPath = NSString(string: "~/Library/Application Support/Memoir/mcp.sock").expandingTildeInPath
-let appBundleID = "de.jandow.Memoir"
+#endif
 let disabledMessage = "Memoir access for AI assistants is turned off. Turn it on in Memoir Settings > AI Assistants."
 
 func log(_ message: String) {
@@ -76,6 +80,15 @@ func enclosingAppURL() -> URL? {
     }
     return nil
 }
+
+// Read from the enclosing app, since Config/Local.xcconfig can change it. The
+// fallback only matters when the bridge runs outside an app bundle.
+#if DEBUG
+let fallbackBundleID = "de.jandow.Memoir.debug"
+#else
+let fallbackBundleID = "de.jandow.Memoir"
+#endif
+let appBundleID = enclosingAppURL().flatMap { Bundle(url: $0)?.bundleIdentifier } ?? fallbackBundleID
 
 func launchAppIfNeeded() {
     guard NSRunningApplication.runningApplications(withBundleIdentifier: appBundleID).isEmpty else { return }
