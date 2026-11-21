@@ -4,5 +4,14 @@
 <dict>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Memoir records the audio of other meeting participants playing on this Mac. Audio is transcribed on this Mac and never leaves it.</string>
+	<!-- Deployed to GitHub Pages by .github/workflows/pages.yml. -->
+	<key>SUFeedURL</key>
+	<string>https://robertjndw.github.io/memoir/appcast.xml</string>
+	<!-- Public half of the EdDSA key from Sparkle's generate_keys. The release workflow refuses to
+	     publish while this is still the placeholder, since every update would fail verification. -->
+	<key>SUPublicEDKey</key>
+	<string>4u8Wh4nPO/+OhQvIo/c09iZRPJAMNUYLtJ3hujptUBc=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

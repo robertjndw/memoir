@@ -10,6 +10,15 @@
       "Base",
     ],
   },
+  "packages": [
+    {
+      "kind": "remote",
+      "repository": "https://github.com/sparkle-project/Sparkle",
+      "version": {
+        "up-to-next-major-version": "2.10.1",
+      },
+    },
+  ],
   "files": [
     { "path": "Config/Signing.xcconfig" },
     { "kind": "folder", "path": "Memoir", "target-membership": [ "Memoir" ] },
@@ -43,6 +52,13 @@
           "name": "Embed Helper Tools",
           "bundle-base-path": "build-products-directory",
           "relative-path": "$(EXECUTABLE_FOLDER_PATH)",
+        },
+      ],
+      "package-product-members": [
+        {
+          "package": "Sparkle",
+          "product-name": "Sparkle",
+          "build-phase": { "build-phase": "frameworks" },
         },
       ],
       "build-settings": {

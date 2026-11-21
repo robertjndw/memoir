@@ -1,0 +1,74 @@
+name: Pages
+
+# Deploys the Sparkle appcast to GitHub Pages. The feed is rebuilt from scratch
+# on every run, from the appcast-item.json the release workflow attaches to each
+# signed release. Release notes are read from the releases too, which is why
+# editing or deleting a release also triggers a deploy.
+on:
+  workflow_call:
+  workflow_dispatch:
+  release:
+    types: [edited, deleted]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Deploys replace the whole site, so let each one finish instead of cancelling it halfway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Collect the signed releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/releases"
+          mkdir -p "$dir"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            -q '.[] | select(.draft | not) | select(any(.assets[]; .name == "appcast-item.json")) | .tag_name' |
+          while read -r tag; do
+            mkdir -p "$dir/$tag"
+            gh release download "$tag" --pattern appcast-item.json --output "$dir/$tag/item.json"
+            body="$(gh release view "$tag" --json body -q .body)"
+            if [[ -n "$body" ]]; then
+              gh api markdown -f text="$body" -f mode=gfm -f context="$GITHUB_REPOSITORY" > "$dir/$tag/notes.html"
+            fi
+          done
+
+      - name: Build the site
+        run: |
+          site="$RUNNER_TEMP/site"
+          mkdir -p "$site"
+          python3 -I scripts/build-appcast.py --releases "$RUNNER_TEMP/releases" --output "$site/appcast.xml"
+          # The site only exists for the appcast, so send people who open it to the repository.
+          cat > "$site/index.html" <<EOF
+          <!doctype html>
+          <meta http-equiv="refresh" content="0; url=https://github.com/$GITHUB_REPOSITORY">
+          <a href="https://github.com/$GITHUB_REPOSITORY">github.com/$GITHUB_REPOSITORY</a>
+          EOF
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}appcast.xml
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -5,7 +5,12 @@ name: Release
 # DMG as a workflow artifact instead, without touching any release.
 #
 # Signing is optional: with the Developer ID secrets set the DMG is signed and
-# notarized, without them it is signed ad-hoc. See docs/releasing.md.
+# notarized, without them it is signed ad-hoc. Only a notarized DMG is added to
+# the Sparkle appcast, and only when SPARKLE_PRIVATE_KEY is set: the release gets
+# an appcast-item.json with the update's signature, and pages.yml deploys the
+# feed. A prerelease goes to the beta channel, a normal release to everyone.
+# A notarized DMG also bumps the cask in robertjndw/homebrew-tap when
+# HOMEBREW_TAP_TOKEN is set. See docs/releasing.md.
 on:
   release:
     types: [published]
@@ -23,6 +28,11 @@ jobs:
     # The project uses the Xcode 27 project format, which the macos-26 images can't open.
     runs-on: xcode-27
     timeout-minutes: 60
+    outputs:
+      publish-appcast: ${{ steps.version.outputs.publish-appcast }}
+      version: ${{ steps.version.outputs.version }}
+      notarized: ${{ steps.build.outputs.notarized }}
+      dmg-sha256: ${{ steps.build.outputs.sha256 }}
     # Spelled out because only an explicit bash shell gets pipefail. Without it a failed
     # build-dmg.sh piped into tail would let the step pass.
     defaults:
@@ -32,20 +42,27 @@ jobs:
       XCODE_APP: /Applications/Xcode_27.2.app
       HAS_DEVELOPER_ID: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
       HAS_NOTARY_KEY: ${{ secrets.NOTARY_API_KEY != '' }}
+      HAS_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+      # Keep in step with MACOSX_DEPLOYMENT_TARGET, so Sparkle never offers an update
+      # to a Mac that can't run it.
+      MINIMUM_SYSTEM_VERSION: "26.0"
     steps:
       - uses: actions/checkout@v7
 
       - name: Work out the version
+        id: version
         env:
           TAG: ${{ github.event.release.tag_name }}
           PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
+          publish_appcast=false
           if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
             if [[ ! "$TAG" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)$ ]]; then
               echo "::error::Tag $TAG is not a version like v1.2.3 or v1.2.3-beta.1"
               exit 1
             fi
             version="${BASH_REMATCH[1]}"
+            # The app picks its default update channel from the suffix, so the two have to agree.
             if [[ "$PRERELEASE" == "true" && "$version" != *-* ]]; then
               echo "::error::Prereleases need a suffix such as v$version-beta.1"
               exit 1
@@ -54,21 +71,39 @@ jobs:
               echo "::error::$TAG has a prerelease suffix but is not marked as a prerelease"
               exit 1
             fi
+            if [[ "$HAS_SPARKLE_KEY" == "true" && "$HAS_DEVELOPER_ID" == "true" && "$HAS_NOTARY_KEY" == "true" ]]; then
+              publish_appcast=true
+            else
+              echo "::warning::Not adding this release to the appcast. That needs SPARKLE_PRIVATE_KEY and the Developer ID and notarization secrets."
+            fi
           else
             version="0.0.0-dev.${{ github.run_number }}"
           fi
+          # Checked before the long build, since every update would fail verification on the Macs
+          # that download it.
+          if [[ "$publish_appcast" == "true" ]] && grep -q REPLACE_WITH_SPARKLE_PUBLIC_KEY Config/Info.plist; then
+            echo "::error::Set SUPublicEDKey in Config/Info.plist, see docs/releasing.md"
+            exit 1
+          fi
           {
             echo "VERSION=$version"
-            # CFBundleVersion has to grow with every build, which the run number does.
+            # CFBundleVersion has to grow with every build, and Sparkle compares it across both
+            # channels. The run number does both.
             echo "BUILD=${{ github.run_number }}"
+            echo "CHANNEL=$([[ "$PRERELEASE" == "true" ]] && echo beta)"
+            echo "PUBLISH_APPCAST=$publish_appcast"
           } >> "$GITHUB_ENV"
+          {
+            echo "publish-appcast=$publish_appcast"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Select Xcode
         run: |
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
 
-      # A release that fails the tests gets no DMG. A run by hand skips them, since its DMG is
+      # A release that fails the tests gets no DMG and never reaches the appcast. A run by hand skips them, since its DMG is
       # only an artifact.
       - name: Run the tests
         if: github.event_name == 'release'
@@ -126,12 +161,15 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Build the DMG
+        id: build
         env:
           OUTPUT_DIR: ${{ runner.temp }}/out
         run: |
           dmg="$(./scripts/build-dmg.sh "$VERSION" "$BUILD" | tail -n 1)"
           echo "DMG=$dmg" >> "$GITHUB_ENV"
+          notarized=false
           if [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
+            notarized=true
             signed="Developer ID, notarized"
           elif [[ -n "${SIGNING_IDENTITY:-}" ]]; then
             signed="Developer ID, not notarized"
@@ -140,6 +178,10 @@ jobs:
             echo "::warning::The DMG is signed ad-hoc because the Developer ID secrets are not set."
           fi
           echo "Built \`$(basename "$dmg")\` ($signed)" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "notarized=$notarized"
+            echo "sha256=$(shasum -a 256 "$dmg" | cut -d ' ' -f 1)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Attach the DMG to the release
         if: github.event_name == 'release'
@@ -147,6 +189,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" "$DMG" --clobber
+
+      - name: Sign the update for Sparkle
+        if: github.event_name == 'release' && env.PUBLISH_APPCAST == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          TAG: ${{ github.event.release.tag_name }}
+          PUBLISHED: ${{ github.event.release.published_at }}
+        run: |
+          # build-dmg.sh resolves packages into its own DerivedData, which is where Sparkle's
+          # command line tools end up.
+          sign_update=".build/dmg-derived/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+          signature="$(echo "$SPARKLE_PRIVATE_KEY" | "$sign_update" --ed-key-file - -p "$DMG")"
+
+          # Everything pages.yml needs to list this release in the appcast. Kept on the release
+          # because each Pages deploy rebuilds the feed from scratch.
+          item="$RUNNER_TEMP/appcast-item.json"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg build "$BUILD" \
+            --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$DMG")" \
+            --arg length "$(stat -f %z "$DMG")" \
+            --arg signature "$signature" \
+            --arg minimumSystemVersion "$MINIMUM_SYSTEM_VERSION" \
+            --arg channel "$CHANNEL" \
+            --arg published "$PUBLISHED" \
+            '$ARGS.named' > "$item"
+          gh release upload "$TAG" "$item" --clobber
 
       - name: Upload the DMG as an artifact
         if: github.event_name != 'release'
@@ -159,3 +229,135 @@ jobs:
       - name: Clean up the signing keychain
         if: always() && env.HAS_DEVELOPER_ID == 'true'
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+  appcast:
+    needs: dmg
+    if: github.event_name == 'release' && needs.dmg.outputs.publish-appcast == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+
+  # Homebrew quarantines what it downloads, so an ad-hoc or unnotarized DMG installed through
+  # the cask would be blocked by Gatekeeper. Only notarized builds go to the tap.
+  homebrew:
+    needs: dmg
+    if: github.event_name == 'release' && needs.dmg.outputs.notarized == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+      VERSION: ${{ needs.dmg.outputs.version }}
+      SHA256: ${{ needs.dmg.outputs.dmg-sha256 }}
+      CASK: Casks/memoir.rb
+    steps:
+      - name: Decide whether to update the cask
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          update=false
+          if [[ "$HAS_TAP_TOKEN" != "true" ]]; then
+            echo "::warning::Not updating the Homebrew cask. That needs the HOMEBREW_TAP_TOKEN secret, see docs/releasing.md."
+          elif [[ "$PRERELEASE" != "true" ]]; then
+            echo "$TAG is a stable release, updating the cask."
+            update=true
+          else
+            # Testers get alphas through brew until the first stable release. After that the cask
+            # only follows stable releases, so a prerelease never replaces one.
+            stable="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-pre-releases --exclude-drafts \
+              --limit 1 --json tagName --jq '.[0].tagName // empty')"
+            if [[ -z "$stable" ]]; then
+              echo "$TAG is a prerelease and there is no stable release yet, updating the cask."
+              update=true
+            else
+              echo "$TAG is a prerelease and $stable is already out, leaving the cask on stable."
+            fi
+          fi
+          echo "update=$update" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.policy.outputs.update == 'true'
+        with:
+          repository: robertjndw/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+          # The push below hands git the token through the environment instead, so it never
+          # lands in .git/config.
+          persist-credentials: false
+
+      - name: Bump the cask
+        id: bump
+        if: steps.policy.outputs.update == 'true'
+        working-directory: tap
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9A-Za-z.-]+$ || ! "$SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Got version '$VERSION' and sha256 '$SHA256' from the dmg job, refusing to write them"
+            exit 1
+          fi
+          # Exactly one of each, so a reworked cask (a second version line in a livecheck block,
+          # say) fails here instead of being half updated.
+          for key in version sha256; do
+            count="$(grep -cE "^[[:space:]]*$key \"[^\"]*\"[[:space:]]*$" "$CASK" || true)"
+            if [[ "$count" != 1 ]]; then
+              echo "::error::Expected one $key line in $CASK, found $count"
+              exit 1
+            fi
+          done
+          sed -E \
+            -e "s/^([[:space:]]*)version \"[^\"]*\"[[:space:]]*$/\\1version \"$VERSION\"/" \
+            -e "s/^([[:space:]]*)sha256 \"[^\"]*\"[[:space:]]*$/\\1sha256 \"$SHA256\"/" \
+            "$CASK" > "$RUNNER_TEMP/cask.rb"
+          mv "$RUNNER_TEMP/cask.rb" "$CASK"
+          if ! grep -qE "^[[:space:]]*version \"$VERSION\"$" "$CASK" || ! grep -qE "^[[:space:]]*sha256 \"$SHA256\"$" "$CASK"; then
+            echo "::error::$CASK does not carry $VERSION and its sha256 after the edit"
+            exit 1
+          fi
+          if git diff --quiet; then
+            # A re-run of the same release.
+            echo "The cask is already on $VERSION, nothing to push."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push to the tap
+        if: steps.bump.outputs.changed == 'true'
+        working-directory: tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w 0)"
+          echo "::add-mask::$auth"
+          # Config through the environment reaches only the git commands of this step and stays
+          # out of argv, where other processes could read it.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet -am "chore: update memoir to $VERSION"
+
+          # Other apps' release workflows push to the same tap, so a push can lose the race.
+          branch="$(git rev-parse --abbrev-ref HEAD)"
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase --quiet origin "$branch" && git push origin "HEAD:$branch"; then
+              echo "Updated the cask to $VERSION" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            echo "Push attempt $attempt failed, retrying."
+            sleep $((attempt * 5))
+          done
+          echo "::error::Could not push the cask update to robertjndw/homebrew-tap"
+          exit 1

@@ -5,6 +5,7 @@ import os
 @main
 struct MemoirApp: App {
     @State private var model = AppModel.shared
+    @State private var updater = Updater(model: AppModel.shared)
 
     var body: some Scene {
         MenuBarExtra {
@@ -24,7 +25,13 @@ struct MemoirApp: App {
         }
         .modelContainer(model.container)
         .defaultSize(width: 1080, height: 700)
-        .commands { MeetingMenuCommands() }
+        .commands {
+            MeetingMenuCommands()
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!Updater.isEnabled || !updater.canCheckForUpdates)
+            }
+        }
         .defaultLaunchBehavior(.suppressed)
 
         Window("Welcome to Memoir", id: AppModel.WindowID.onboarding) {
@@ -39,6 +46,7 @@ struct MemoirApp: App {
         Settings {
             SettingsView()
                 .environment(model)
+                .environment(updater)
                 .regularAppWindow(model)
         }
     }

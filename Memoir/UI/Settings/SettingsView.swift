@@ -41,6 +41,7 @@ struct SettingsView: View {
 
 private struct GeneralPane: View {
     @Environment(AppModel.self) private var model
+    @Environment(Updater.self) private var updater
     @State private var locales: [Locale] = []
     @State private var speech = SpeechModelController()
     @State private var loginStatus = SMAppService.mainApp.status
@@ -48,6 +49,7 @@ private struct GeneralPane: View {
 
     var body: some View {
         @Bindable var settings = model.settings
+        @Bindable var updater = updater
         Form {
             Section {
                 Toggle("Open Memoir at login", isOn: loginBinding)
@@ -86,6 +88,35 @@ private struct GeneralPane: View {
             } footer: {
                 Text("Transcription runs entirely on this Mac. Audio is never sent anywhere.")
             }
+
+            Section {
+                Toggle("Check for updates automatically", isOn: $updater.checksAutomatically)
+                Picker("Update channel", selection: $updater.receivesBetaUpdates) {
+                    Text("Stable").tag(false)
+                    Text("Beta").tag(true)
+                }
+                LabeledContent {
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .disabled(!updater.canCheckForUpdates)
+                } label: {
+                    if let date = updater.lastCheckDate {
+                        Text("Last checked \(date.formatted(date: .abbreviated, time: .shortened))")
+                    } else {
+                        Text("Not checked yet")
+                    }
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                if !Updater.isEnabled {
+                    Text("Updates are turned off in debug builds.")
+                } else if updater.receivesBetaUpdates {
+                    Text("Betas come out earlier and can have more bugs. If a newer stable version comes out, you get that instead.")
+                } else {
+                    Text("Memoir doesn't check for updates while it is recording.")
+                }
+            }
+            .disabled(!Updater.isEnabled)
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
@@ -569,6 +600,7 @@ private struct PermissionRow: View {
     @Previewable @State var model = AppModel.preview()
     SettingsView()
         .environment(model)
+        .environment(Updater(model: model))
 }
 
 #Preview("AI Assistants") {

@@ -115,7 +115,19 @@ the one part of Memoir where meeting content leaves your Mac.
 
 ## Installation
 
-There are no prebuilt releases yet, so Memoir is built from source.
+With [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask robertjndw/tap/memoir
+```
+
+Or download the DMG from the
+[latest release](https://github.com/robertjndw/memoir/releases/latest) and drag
+Memoir to Applications. Memoir updates itself after that. Settings > General
+lets you switch to the Beta channel or turn off automatic update checks.
+
+### From source
+
 **Requirements:** Xcode 27.
 
 ```sh
