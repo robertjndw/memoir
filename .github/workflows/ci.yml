@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # The project uses the Xcode 27 project format, which the macos-26 images can't open.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      XCODE_APP: /Applications/Xcode_27.2.app
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
+      # Config/Signing.xcconfig signs ad-hoc by default, so this needs no secrets and works for forks.
+      # The tests are hosted in the app with inert services, so the runner needs no microphone or
+      # Apple Intelligence.
+      - name: Run the tests
+        run: |
+          xcodebuild test \
+            -project Memoir.xcodeproj \
+            -scheme Memoir \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/ci-derived \
+            -resultBundlePath .build/ci-derived/MemoirTests.xcresult \
+            -quiet
+
+      # Whole-module optimization and the missing DEBUG flag catch things the Debug test build doesn't.
+      - name: Build Release
+        run: |
+          xcodebuild build \
+            -project Memoir.xcodeproj \
+            -scheme Memoir \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath .build/ci-derived \
+            -quiet
+
+      - name: Keep the test results
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: .build/ci-derived/MemoirTests.xcresult
+          if-no-files-found: ignore

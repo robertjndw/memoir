@@ -1,0 +1,10 @@
+.DS_Store
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+.swiftpm/
+.build/
+
+# Per-developer signing, see Config/Local.xcconfig.example
+Config/Local.xcconfig
