@@ -14,7 +14,7 @@ struct TranscriptTail: View {
     var body: some View {
         Group {
             if tail.isEmpty && pending.isEmpty {
-                Text("Listening...")
+                Text("Listening…")
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

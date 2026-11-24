@@ -499,7 +499,10 @@ private struct CopyButton: View {
             copied = true
         } label: {
             Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                .contentTransition(.symbolEffect(.replace))
         }
+        .animation(.smooth(duration: 0.2), value: copied)
+        .sensoryFeedback(.alignment, trigger: copied) { _, copied in copied }
         .task(id: copied) {
             guard copied else { return }
             try? await Task.sleep(for: .seconds(1.5))

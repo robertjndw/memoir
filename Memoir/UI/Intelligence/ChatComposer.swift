@@ -8,6 +8,7 @@ struct ChatComposer: View {
     let stop: () -> Void
 
     @FocusState private var focused: Bool
+    @State private var selection: TextSelection?
 
     private var canSend: Bool {
         isEnabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -15,7 +16,7 @@ struct ChatComposer: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Ask a question", text: $text, axis: .vertical)
+            TextField("Ask a question", text: $text, selection: $selection, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .focused($focused)
@@ -23,7 +24,7 @@ struct ChatComposer: View {
                 .padding(.vertical, 6)
                 .onKeyPress(.return, phases: .down) { press in
                     if press.modifiers.contains(.shift) {
-                        text += "\n"
+                        insertNewline()
                         return .handled
                     }
                     if canSend && !isResponding { send() }
@@ -57,6 +58,19 @@ struct ChatComposer: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
         .intelligenceGlow(isActive: isResponding, cornerRadius: 20)
         .onAppear { focused = true }
+    }
+
+    /// Shift-Return breaks the line where the cursor is, replacing any selected text.
+    private func insertNewline() {
+        guard case .selection(let range) = selection?.indices,
+              range.lowerBound >= text.startIndex, range.upperBound <= text.endIndex
+        else {
+            text += "\n"
+            return
+        }
+        let offset = text.distance(from: text.startIndex, to: range.lowerBound)
+        text.replaceSubrange(range, with: "\n")
+        selection = TextSelection(insertionPoint: text.index(text.startIndex, offsetBy: offset + 1))
     }
 }
 

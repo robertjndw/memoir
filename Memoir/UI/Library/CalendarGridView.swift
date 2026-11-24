@@ -146,6 +146,7 @@ private struct DayCell: View {
     let action: () -> Void
 
     @Environment(\.calendar) private var calendar
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -166,11 +167,15 @@ private struct DayCell: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(.selection.opacity(0.35))
                         .matchedGeometryEffect(id: "selection", in: selectionNamespace)
+                } else if isHovered {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.primary.opacity(0.06))
                 }
             }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
         .focusable(false)
         .accessibilityLabel(label)
         .accessibilityAddTraits(isSelected ? .isSelected : [])

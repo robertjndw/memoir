@@ -72,11 +72,11 @@ private struct MeetingActionsModifier: ViewModifier {
         let canDelete = model.recordingMeetingID != meeting.id
         content
             .contextMenu {
-                Button("Rename...") { commands.rename(meeting) }
+                Button("Rename…") { commands.rename(meeting) }
                 Button("Reveal in Finder") { commands.reveal(meeting) }
-                Button("Export...") { commands.export(meeting) }
+                Button("Export…") { commands.export(meeting) }
                 Divider()
-                Button("Delete...", role: .destructive) { commands.delete(meeting) }
+                Button("Delete…", role: .destructive) { commands.delete(meeting) }
                     .disabled(!canDelete)
             }
             .swipeActions(edge: .trailing) {

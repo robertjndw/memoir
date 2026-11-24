@@ -148,7 +148,7 @@ struct JustRecordedCard: View {
                     .lineLimit(3)
                     .transition(.blurReplace)
             } else {
-                IntelligenceActivity("Summarizing...")
+                IntelligenceActivity("Summarizing…")
                     .font(.callout)
                     .transition(.blurReplace)
             }

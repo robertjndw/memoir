@@ -111,7 +111,7 @@ private struct ChatMessageRow: View {
 
 private struct ThinkingIndicator: View {
     var body: some View {
-        IntelligenceActivity("Thinking...")
+        IntelligenceActivity("Thinking…")
     }
 }
 

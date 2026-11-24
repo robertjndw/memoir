@@ -4,6 +4,8 @@ import SwiftUI
 struct TranscriptView: View {
     let meeting: Meeting
     var playback: PlaybackController
+    /// Set by the Find command. Cleared here once the field has taken focus.
+    @Binding var findRequested: Bool
 
     @Environment(AppModel.self) private var model
     @State private var query = ""
@@ -23,6 +25,13 @@ struct TranscriptView: View {
                 Divider()
                 transcript(lines: lines, matches: matches)
             }
+            // `initial` covers Command-F from another tab, where this view appears with the
+            // request already set.
+            .onChange(of: findRequested, initial: true) { _, requested in
+                guard requested else { return }
+                findFocused = true
+                findRequested = false
+            }
         }
     }
 
@@ -39,7 +48,7 @@ struct TranscriptView: View {
                 Text("This recording has audio but no transcript yet.")
             } actions: {
                 // Same style as the Summarize button in the summary tab.
-                Group {
+                VStack(spacing: 12) {
                     if model.retranscribing.contains(meeting.id) {
                         TranscribingStatus()
                             .transition(.blurReplace)
@@ -50,9 +59,17 @@ struct TranscriptView: View {
                         .buttonStyle(.glassProminent)
                         .controlSize(.large)
                         .transition(.blurReplace)
+                        if let failure = model.transcriptionErrors[meeting.id] {
+                            Label(failure, systemImage: "exclamationmark.triangle.fill")
+                                .symbolRenderingMode(.multicolor)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .transition(.blurReplace)
+                        }
                     }
                 }
                 .animation(.smooth(duration: 0.3), value: model.retranscribing.contains(meeting.id))
+                .animation(.smooth(duration: 0.3), value: model.transcriptionErrors[meeting.id])
             }
         } else {
             ContentUnavailableView("No Transcript", systemImage: "quote.bubble", description: Text("Nothing was transcribed for this meeting."))
@@ -69,7 +86,7 @@ struct TranscriptView: View {
                     .foregroundStyle(.tint)
                     .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
                     .accessibilityHidden(true)
-                ShimmeringText("Transcribing...")
+                ShimmeringText("Transcribing…")
             }
             .font(.title3)
             .accessibilityElement(children: .combine)
@@ -89,19 +106,39 @@ struct TranscriptView: View {
                 .focused($findFocused)
                 .onSubmit { step(by: 1, count: matches.count) }
                 .onChange(of: query) { matchPosition = 0 }
-            if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Escape first clears the search, then gives up the field, like in Safari.
+                .onExitCommand {
+                    if query.isEmpty { findFocused = false } else { query = "" }
+                }
+            if isSearching {
                 Text(matches.isEmpty ? "No matches" : "\(min(matchPosition, matches.count - 1) + 1) of \(matches.count)")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                Button { step(by: -1, count: matches.count) } label: { Image(systemName: "chevron.up") }
-                    .accessibilityLabel("Previous match")
-                Button { step(by: 1, count: matches.count) } label: { Image(systemName: "chevron.down") }
-                    .accessibilityLabel("Next match")
+                    .contentTransition(.numericText())
+                    .transition(.opacity)
+                Group {
+                    Button { step(by: -1, count: matches.count) } label: { Image(systemName: "chevron.up") }
+                        .keyboardShortcut("g", modifiers: [.command, .shift])
+                        .help("Previous Match (Shift-Command-G)")
+                        .accessibilityLabel("Previous match")
+                    Button { step(by: 1, count: matches.count) } label: { Image(systemName: "chevron.down") }
+                        .keyboardShortcut("g", modifiers: .command)
+                        .help("Next Match (Command-G)")
+                        .accessibilityLabel("Next match")
+                }
+                .disabled(matches.isEmpty)
+                .transition(.opacity)
             }
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+        .animation(.smooth(duration: 0.2), value: isSearching)
+        .animation(.snappy(duration: 0.2), value: matchPosition)
+    }
+
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func step(by delta: Int, count: Int) {
@@ -126,7 +163,7 @@ struct TranscriptView: View {
 #if DEBUG
 #Preview("Transcript") {
     @Previewable @State var model = AppModel.preview(samples: true)
-    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController())
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController(), findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)
@@ -135,7 +172,7 @@ struct TranscriptView: View {
 #Preview("Playing") {
     @Previewable @State var model = AppModel.preview(samples: true)
     @Previewable @State var playback = PlaybackController.preview(at: 18, of: 42 * 60, playing: true)
-    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback)
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback, findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)
@@ -144,7 +181,7 @@ struct TranscriptView: View {
 #Preview("Paused") {
     @Previewable @State var model = AppModel.preview(samples: true)
     @Previewable @State var playback = PlaybackController.preview(at: 18, of: 42 * 60)
-    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback)
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback, findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)
@@ -158,7 +195,7 @@ struct TranscriptView: View {
             volatile: [.others: "Works for me, I'll tell"]
         )
     }
-    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController())
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController(), findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)
@@ -166,7 +203,7 @@ struct TranscriptView: View {
 
 #Preview("Listening") {
     @Previewable @State var model = AppModel.preview { $0.simulateRecording(Meeting(title: "Design Review")) }
-    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController())
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController(), findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)
@@ -176,7 +213,7 @@ struct TranscriptView: View {
     @Previewable @State var model = AppModel.preview(samples: true) {
         $0.simulateTranscribing($0.previewMeeting("Voice Note"))
     }
-    TranscriptView(meeting: model.previewMeeting("Voice Note"), playback: PlaybackController())
+    TranscriptView(meeting: model.previewMeeting("Voice Note"), playback: PlaybackController(), findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)
@@ -184,7 +221,7 @@ struct TranscriptView: View {
 
 #Preview("Audio, no transcript") {
     @Previewable @State var model = AppModel.preview(samples: true)
-    TranscriptView(meeting: model.previewMeeting("Voice Note"), playback: PlaybackController())
+    TranscriptView(meeting: model.previewMeeting("Voice Note"), playback: PlaybackController(), findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)

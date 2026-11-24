@@ -27,6 +27,12 @@ struct OnboardingView: View {
             footer
         }
         .frame(width: 560, height: 620)
+        // A granted permission swaps its button for the checkmark instead of popping in.
+        .animation(.smooth(duration: 0.3), value: permissions.microphone)
+        .animation(.smooth(duration: 0.3), value: permissions.calendarGranted)
+        .animation(.smooth(duration: 0.3), value: permissions.calendarRefused)
+        .animation(.smooth(duration: 0.3), value: speech.status)
+        .sensoryFeedback(.success, trigger: grantedCount)
         .task {
             permissions.bind(calendar: model.services.calendar)
         }
@@ -36,6 +42,12 @@ struct OnboardingView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             permissions.refresh()
         }
+    }
+
+    /// Counts up as permissions are granted and the model finishes installing.
+    private var grantedCount: Int {
+        [permissions.microphone == .granted, permissions.calendarGranted, speech.status == .installed]
+            .count { $0 }
     }
 
     private var transition: AnyTransition {
@@ -318,14 +330,18 @@ extension StepLayout where Hero == SymbolHero {
 private struct SymbolHero: View {
     let name: String
     @ScaledMetric private var size = 64.0
+    @State private var appeared = false
 
     var body: some View {
         Image(systemName: name)
             .font(.system(size: size))
             .symbolRenderingMode(.hierarchical)
             .foregroundStyle(.tint)
+            // One bounce as the step slides in. Symbol effects already respect Reduce Motion.
+            .symbolEffect(.bounce, value: appeared)
             .frame(height: size * 1.3)
             .accessibilityHidden(true)
+            .onAppear { appeared = true }
     }
 }
 
@@ -347,6 +363,7 @@ private struct GrantedBadge: View {
         Label(text, systemImage: "checkmark.circle.fill")
             .font(.headline)
             .foregroundStyle(.green)
+            .transition(.blurReplace)
     }
 }
 
@@ -357,11 +374,12 @@ private struct PageDots: View {
     var body: some View {
         HStack(spacing: 7) {
             ForEach(0..<count, id: \.self) { index in
-                Circle()
+                Capsule()
                     .fill(index == current ? Color.primary : Color.secondary.opacity(0.35))
-                    .frame(width: 7, height: 7)
+                    .frame(width: index == current ? 18 : 7, height: 7)
             }
         }
+        .animation(.snappy(duration: 0.3), value: current)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Step \(current + 1) of \(count)")
     }
