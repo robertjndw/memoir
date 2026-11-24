@@ -74,7 +74,7 @@ struct LibraryView: View {
             presenting: deleteTarget
         ) { meeting in
             Button("Delete \"\(meeting.title)\"", role: .destructive) {
-                if selectedID == meeting.id { selectedID = nil }
+                if selectedID == meeting.id { selectedID = selectionAfterDeleting(meeting) }
                 model.delete(meeting)
             }
         } message: { _ in
@@ -176,6 +176,18 @@ struct LibraryView: View {
                 deleteTarget = meeting
             }
         )
+    }
+
+    /// The row that takes over the selection, like in Mail and Notes: the one below, or the
+    /// one above when the last row is deleted. Limited to what the column currently shows.
+    private func selectionAfterDeleting(_ meeting: Meeting) -> UUID? {
+        var visible = meetings.filter { MeetingGrouping.matches($0, query: searchText) }
+        if meetingsLayout == .calendar {
+            visible = visible.filter { calendar.isDate($0.startDate, inSameDayAs: selectedDay) }
+        }
+        guard let index = visible.firstIndex(where: { $0.id == meeting.id }) else { return nil }
+        if index + 1 < visible.count { return visible[index + 1].id }
+        return index > 0 ? visible[index - 1].id : nil
     }
 
     private func applyPendingSelection() {

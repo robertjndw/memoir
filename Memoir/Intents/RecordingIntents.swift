@@ -7,8 +7,13 @@ struct StartRecordingIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
-        guard !model.isRecording else {
+        switch model.recordingState {
+        case .idle:
+            break
+        case .starting, .recording:
             return .result(dialog: "Memoir is already recording.")
+        case .finishing:
+            return .result(dialog: "Memoir is still saving the last recording. Try again in a moment.")
         }
         await model.startRecording()
         guard model.isRecording else {
@@ -25,10 +30,11 @@ struct StopRecordingIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
-        guard model.isRecording else {
+        guard model.recordingState != .idle else {
             return .result(dialog: "Memoir is not recording.")
         }
-        await model.stopRecording()
+        // Also covers a recording that is only just starting, which would otherwise keep running.
+        await model.finishRecording()
         return .result(dialog: "Recording saved.")
     }
 }

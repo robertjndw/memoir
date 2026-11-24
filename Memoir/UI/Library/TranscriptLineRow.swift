@@ -20,6 +20,8 @@ enum TranscriptLineEmphasis: Equatable {
 struct TranscriptLineRow: View {
     let row: TranscriptRow
     let query: String
+    /// The match that Find is currently on, which stands out from the other matches.
+    var isFocusedMatch = false
     let emphasis: TranscriptLineEmphasis
     /// Set when the recording can be played; lines become click-to-seek buttons.
     let playback: PlaybackController?
@@ -150,7 +152,13 @@ struct TranscriptLineRow: View {
         while let found = text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange) {
             if let lower = AttributedString.Index(found.lowerBound, within: result),
                let upper = AttributedString.Index(found.upperBound, within: result) {
-                result[lower..<upper].backgroundColor = .yellow.opacity(0.5)
+                if isFocusedMatch {
+                    // Solid yellow needs dark text in both appearances.
+                    result[lower..<upper].backgroundColor = .yellow
+                    result[lower..<upper].foregroundColor = .black
+                } else {
+                    result[lower..<upper].backgroundColor = .yellow.opacity(0.35)
+                }
             }
             searchRange = found.upperBound..<text.endIndex
         }

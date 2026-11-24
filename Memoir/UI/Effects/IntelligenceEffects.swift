@@ -119,8 +119,8 @@ struct IntelligenceActivity: View {
 
 #Preview("Activity") {
     VStack(spacing: 24) {
-        IntelligenceActivity("Thinking...")
-        IntelligenceActivity("Summarizing...")
+        IntelligenceActivity("Thinking…")
+        IntelligenceActivity("Summarizing…")
         Text("Ask a question")
             .padding(.horizontal, 14)
             .padding(.vertical, 10)

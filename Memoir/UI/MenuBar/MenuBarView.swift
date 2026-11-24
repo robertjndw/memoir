@@ -39,11 +39,11 @@ struct MenuBarView: View {
         case .idle:
             IdleView().transition(.blurReplace)
         case .starting:
-            StatusRow(title: "Starting...").transition(.blurReplace)
+            StatusRow(title: "Starting…").transition(.blurReplace)
         case .recording:
             RecordingView().transition(.blurReplace)
         case .finishing:
-            StatusRow(title: "Saving recording...").transition(.blurReplace)
+            StatusRow(title: "Saving recording…").transition(.blurReplace)
         }
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftData
 import SwiftUI
 import os
@@ -6,6 +7,7 @@ import os
 struct MemoirApp: App {
     @State private var model = AppModel.shared
     @State private var updater = Updater(model: AppModel.shared)
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         MenuBarExtra {
@@ -49,6 +51,21 @@ struct MemoirApp: App {
                 .environment(updater)
                 .regularAppWindow(model)
         }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    // Every way of quitting ends up here: the menu bar window, the Dock, the app menu, an
+    // update relaunch and logging out. Quitting mid-recording would drop the audio mix and the
+    // tail of the transcript, so the recording is finalized first.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let model = AppModel.shared
+        guard model.recordingState != .idle else { return .terminateNow }
+        Task {
+            await model.finishRecording()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 

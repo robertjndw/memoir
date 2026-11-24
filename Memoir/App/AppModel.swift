@@ -52,6 +52,8 @@ final class AppModel {
     private(set) var intelligenceAvailability: IntelligenceAvailability
     private(set) var summaryActivity: [UUID: SummaryActivity] = [:]
     private(set) var retranscribing: Set<UUID> = []
+    /// Why the last attempt to transcribe a meeting from its file produced nothing.
+    private(set) var transcriptionErrors: [UUID: String] = [:]
 
     /// Meeting the Library should select when it opens or comes forward.
     var librarySelection: UUID?
@@ -212,6 +214,12 @@ final class AppModel {
                 locale: locale,
                 contextualStrings: meeting.attendees + (event.map { [$0.title] } ?? [])
             )
+            // Stopped while the transcriber was still starting: `stopRecording` could not finish
+            // it then, so do it here instead of attaching updates to a saved meeting.
+            guard recordingState == .recording(meeting.id) else {
+                await transcriber.finish()
+                return
+            }
             self.transcriber = transcriber
             updatesTask = Task { [weak self] in
                 for await update in updates {
@@ -243,6 +251,7 @@ final class AppModel {
             meeting.status = .ready
             try? context.save()
             lastRecording = FinishedRecording(meetingID: meetingID, date: .now)
+            contentChanged(in: meetingID)
             if settings.autoSummarize, !meeting.segments.isEmpty {
                 Task { await summarize(meeting) }
             }
@@ -257,6 +266,23 @@ final class AppModel {
         levels = AudioLevels()
         services.detector.setRecording(false)
         recordingState = .idle
+    }
+
+    /// Brings a recording that is starting, running or being saved to a finished file. Unlike
+    /// `stopRecording` it also waits out the transitional states, which is what quitting and
+    /// the Stop shortcut need.
+    func finishRecording() async {
+        // A start can sit behind a permission prompt for as long as the user likes. Quitting
+        // should not wait on that forever.
+        let deadline = Date.now.addingTimeInterval(15)
+        while recordingState != .idle, Date.now < deadline {
+            if isRecording {
+                await stopRecording()
+            } else {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        try? context.save()
     }
 
     private func apply(_ update: TranscriptUpdate, to meeting: Meeting) {
@@ -340,6 +366,8 @@ final class AppModel {
         )
         do {
             for try await progress in services.intelligence.summarize(request) {
+                // Deleted while the model was still writing. Touching the model now would trap.
+                guard isStored(meeting) else { return }
                 switch progress {
                 case .condensing(let fraction):
                     summaryActivity[id]?.condensing = fraction
@@ -353,10 +381,12 @@ final class AppModel {
                         meeting.title = title
                     }
                     try? context.save()
+                    contentChanged(in: id)
                 }
             }
             summaryActivity[id] = nil
         } catch {
+            guard isStored(meeting) else { return }
             summaryActivity[id] = SummaryActivity(isRunning: false, error: error.localizedDescription)
         }
     }
@@ -366,6 +396,7 @@ final class AppModel {
         let id = meeting.id
         guard let url = meeting.audioURL, !retranscribing.contains(id), recordingMeetingID != id else { return }
         retranscribing.insert(id)
+        transcriptionErrors[id] = nil
         defer { retranscribing.remove(id) }
 
         var lines: [TranscriptLine] = []
@@ -378,11 +409,15 @@ final class AppModel {
                 lines.append(TranscriptLine(speaker: update.speaker, start: update.start, end: update.end, text: text))
             }
         } catch {
-            errorMessage = "Transcription failed: \(error.localizedDescription)"
+            if isStored(meeting) { transcriptionErrors[id] = error.localizedDescription }
             return
         }
+        guard isStored(meeting) else { return }
         // Only swap once the new transcript is complete, so a failure keeps the old one.
-        guard !lines.isEmpty else { return }
+        guard !lines.isEmpty else {
+            transcriptionErrors[id] = String(localized: "No speech was found in this recording.")
+            return
+        }
         for segment in meeting.segments {
             context.delete(segment)
         }
@@ -392,9 +427,23 @@ final class AppModel {
             segment.meeting = meeting
         }
         try? context.save()
+        contentChanged(in: id)
+    }
+
+    /// Chat sessions index the store when they are created and would keep answering from
+    /// the old transcript or summary.
+    private func contentChanged(in meetingID: UUID) {
+        chats[.library]?.invalidateSession()
+        chats[.meeting(meetingID)]?.invalidateSession()
     }
 
     // MARK: - Library
+
+    /// False once the meeting was deleted. Long-running work holds on to the model object and
+    /// has to check before writing to it.
+    private func isStored(_ meeting: Meeting) -> Bool {
+        !meeting.isDeleted && meeting.modelContext != nil
+    }
 
     func meeting(with id: UUID) -> Meeting? {
         var descriptor = FetchDescriptor<Meeting>(predicate: #Predicate { $0.id == id })
@@ -420,8 +469,11 @@ final class AppModel {
     func delete(_ meeting: Meeting) {
         guard recordingMeetingID != meeting.id else { return }
         let id = meeting.id
+        chats[.meeting(id)]?.stop()
         chats[.meeting(id)] = nil
+        chats[.library]?.invalidateSession()
         summaryActivity[id] = nil
+        transcriptionErrors[id] = nil
         if librarySelection == id { librarySelection = nil }
         if lastRecording?.meetingID == id { lastRecording = nil }
         context.delete(meeting)

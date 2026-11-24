@@ -57,15 +57,15 @@ struct SummaryPane: View {
         case .ready(let summary):
             reading(summary: summary, canRegenerate: true)
         case .generating(let draft):
-            reading(summary: draft, canRegenerate: false, progressLabel: "Summarizing...")
+            reading(summary: draft, canRegenerate: false, progressLabel: "Summarizing…")
         case .preparing(let previous):
             if let previous {
-                reading(summary: previous, canRegenerate: false, progressLabel: "Summarizing...")
+                reading(summary: previous, canRegenerate: false, progressLabel: "Summarizing…")
             } else {
-                progress(value: nil, label: "Preparing...")
+                progress(value: nil, label: "Preparing…")
             }
         case .condensing(let fraction):
-            progress(value: fraction, label: "Reading transcript...")
+            progress(value: fraction, label: "Reading transcript…")
         case .failed(let message, let previous):
             reading(summary: previous, canRegenerate: false, error: message)
         case .empty:

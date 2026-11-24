@@ -58,10 +58,14 @@ final class ChatController {
                 streamingText = nil
             }
             do {
+                var session = session
                 if session == nil {
                     session = await model.services.intelligence.makeChatSession(
                         scope: scope, corpus: corpus, history: history
                     )
+                    // Cleared while the session was being made: it was built on the old history.
+                    guard !Task.isCancelled else { return }
+                    self.session = session
                 }
                 guard let session else { return }
                 var answer = ""
@@ -69,7 +73,12 @@ final class ChatController {
                     answer = snapshot
                     streamingText = snapshot
                 }
-                if !answer.isEmpty {
+                // A cancelled stream just ends instead of throwing, so without this check a
+                // stopped answer would be saved half-written.
+                guard !Task.isCancelled else { return }
+                if answer.isEmpty {
+                    errorMessage = String(localized: "Memoir had no answer to that. Try asking in a different way.")
+                } else {
                     append(.assistant, answer)
                 }
             } catch is CancellationError {
@@ -86,6 +95,12 @@ final class ChatController {
         responseTask?.cancel()
     }
 
+    /// The session caches what it read from the store. Call this when a transcript or summary
+    /// changed so the next question starts a fresh one, seeded with the conversation so far.
+    func invalidateSession() {
+        session = nil
+    }
+
     func clear() {
         stop()
         guard let model else { return }
@@ -99,6 +114,10 @@ final class ChatController {
 
     private func append(_ role: ChatTurn.Role, _ text: String) {
         guard let model else { return }
+        let meeting = meeting
+        // A meeting's chat whose meeting is gone must not save anything: a message without a
+        // meeting would show up in the Ask Memoir conversation.
+        if scope != .library, meeting == nil { return }
         let message = ChatMessage(role: role, text: text)
         model.context.insert(message)
         message.meeting = meeting

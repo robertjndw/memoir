@@ -8,6 +8,8 @@ struct FocusedMeeting {
     let tab: Binding<MeetingDetailView.Tab>
     /// Focuses the title field. Titles are edited inline, not in a sheet.
     let rename: () -> Void
+    /// Shows the transcript and puts the cursor in its find field.
+    let find: () -> Void
 }
 
 extension FocusedValues {
@@ -29,10 +31,16 @@ struct MeetingMenuCommands: Commands {
             Divider()
         }
 
+        CommandGroup(after: .textEditing) {
+            Button("Find in Transcript") { focused?.find() }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(focused == nil)
+        }
+
         CommandMenu("Meeting") {
             Button("Rename") { focused?.rename() }
                 .disabled(focused == nil)
-            Button("Export as Markdown...") {
+            Button("Export as Markdown…") {
                 if let focused { focused.commands.export(focused.meeting) }
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -45,7 +53,7 @@ struct MeetingMenuCommands: Commands {
             Divider()
             // No shortcut: Command-Delete has to keep deleting to the start of the line in text fields.
             // The Delete key works in the list.
-            Button("Delete Meeting...") {
+            Button("Delete Meeting…") {
                 if let focused { focused.commands.delete(focused.meeting) }
             }
             .disabled(focused == nil || focused?.isRecording == true)

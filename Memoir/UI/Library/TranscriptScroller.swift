@@ -16,6 +16,9 @@ struct TranscriptScroller: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var currentLineID: UUID?
     @State private var isFollowing = true
+    /// Live transcripts stick to the newest line until the reader scrolls up to look at
+    /// something earlier.
+    @State private var isPinnedToLatest = true
 
     private var tracksPlayback: Bool { playback.isLoaded && !isLive }
 
@@ -33,6 +36,7 @@ struct TranscriptScroller: View {
                         TranscriptLineRow(
                             row: row,
                             query: query,
+                            isFocusedMatch: row.id == focusedMatch,
                             emphasis: emphasis(for: row.id, current: current),
                             playback: tracksPlayback ? playback : nil
                         )
@@ -54,9 +58,41 @@ struct TranscriptScroller: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                followAlongButton(visible: tracksPlayback && playback.isPlaying && !isFollowing && current != nil) {
-                    isFollowing = true
-                    scroll(proxy, to: currentLineID)
+                if isLive {
+                    floatingButton(
+                        "Jump to Latest", symbol: "arrow.down",
+                        help: "Scroll to the newest line",
+                        visible: !isPinnedToLatest
+                    ) {
+                        isPinnedToLatest = true
+                        proxy.scrollTo(Self.endID, anchor: .bottom)
+                    }
+                } else {
+                    floatingButton(
+                        "Follow Along", symbol: "text.line.first.and.arrowtriangle.forward",
+                        help: "Scroll back to the line being played",
+                        visible: tracksPlayback && playback.isPlaying && !isFollowing && current != nil
+                    ) {
+                        isFollowing = true
+                        scroll(proxy, to: currentLineID)
+                    }
+                }
+            }
+            .onScrollGeometryChange(for: LiveScrollMetrics.self) { geometry in
+                LiveScrollMetrics(
+                    contentHeight: geometry.contentSize.height,
+                    distanceFromBottom: geometry.contentSize.height
+                        - geometry.contentOffset.y - geometry.containerSize.height
+                )
+            } action: { old, new in
+                guard isLive else { return }
+                // Growth while pinned is new speech, which the view keeps up with. Any other
+                // change is the reader scrolling. Not animated, so the next report already
+                // sees the bottom and the pin holds.
+                if new.contentHeight > old.contentHeight, isPinnedToLatest {
+                    proxy.scrollTo(Self.endID, anchor: .bottom)
+                } else {
+                    isPinnedToLatest = new.distanceFromBottom < 40
                 }
             }
             .onScrollPhaseChange { _, phase in
@@ -93,10 +129,6 @@ struct TranscriptScroller: View {
                 isFollowing = false
                 scroll(proxy, to: id)
             }
-            .onChange(of: lines.count) {
-                guard isLive else { return }
-                proxy.scrollTo(Self.endID, anchor: .bottom)
-            }
         }
     }
 
@@ -119,15 +151,21 @@ struct TranscriptScroller: View {
         }
     }
 
-    private func followAlongButton(visible: Bool, action: @escaping () -> Void) -> some View {
+    private func floatingButton(
+        _ title: LocalizedStringKey,
+        symbol: String,
+        help: LocalizedStringKey,
+        visible: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
         ZStack {
             if visible {
                 Button(action: action) {
-                    Label("Follow Along", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    Label(title, systemImage: symbol)
                 }
                 .buttonStyle(.glass)
                 .controlSize(.large)
-                .help("Scroll back to the line being played")
+                .help(help)
                 .padding(.bottom, 12)
                 .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
@@ -151,4 +189,9 @@ struct TranscriptScroller: View {
             .accessibilityElement(children: .combine)
         }
     }
+}
+
+private struct LiveScrollMetrics: Equatable {
+    var contentHeight: CGFloat
+    var distanceFromBottom: CGFloat
 }

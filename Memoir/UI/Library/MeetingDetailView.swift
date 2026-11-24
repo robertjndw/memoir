@@ -9,6 +9,7 @@ struct MeetingDetailView: View {
     @State private var playback = PlaybackController()
     @State private var tab: Tab
     @State private var titleDraft = ""
+    @State private var findRequested = false
     @FocusState private var titleFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -39,10 +40,6 @@ struct MeetingDetailView: View {
 
     private var isRecording: Bool { model.recordingMeetingID == meeting.id }
 
-    private var speakerSpans: [SpeakerSpan] {
-        meeting.sortedLines.map { SpeakerSpan(start: $0.start, end: $0.end, speaker: $0.speaker) }
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -61,7 +58,7 @@ struct MeetingDetailView: View {
         .safeAreaBar(edge: .bottom, spacing: 0) {
             // The chat has its own composer at the bottom edge, and two stacked bars crowd it.
             if meeting.audioURL != nil, !isRecording, tab != .chat {
-                PlaybackBar(playback: playback, speakers: speakerSpans)
+                MeetingPlaybackBar(meeting: meeting, playback: playback)
                     .transition(.opacity)
             }
         }
@@ -72,7 +69,11 @@ struct MeetingDetailView: View {
             isRecording: isRecording,
             commands: commands,
             tab: $tab,
-            rename: { titleFocused = true }
+            rename: { titleFocused = true },
+            find: {
+                tab = .transcript
+                findRequested = true
+            }
         ))
         .navigationTitle(meeting.title)
         .task(id: meeting.id) {
@@ -104,6 +105,11 @@ struct MeetingDetailView: View {
                     .font(.title.weight(.semibold))
                     .focused($titleFocused)
                     .onSubmit(commitTitle)
+                    // Escape puts the old title back, as when renaming in Finder.
+                    .onExitCommand {
+                        titleDraft = meeting.title
+                        titleFocused = false
+                    }
                     .onChange(of: titleFocused) { _, focused in
                         if !focused { commitTitle() }
                     }
@@ -165,7 +171,7 @@ struct MeetingDetailView: View {
         case .summary:
             SummaryView(meeting: meeting)
         case .transcript:
-            TranscriptView(meeting: meeting, playback: playback)
+            TranscriptView(meeting: meeting, playback: playback, findRequested: $findRequested)
         case .chat:
             ChatView(
                 scope: .meeting(meeting.id),
@@ -200,10 +206,10 @@ struct MeetingDetailView: View {
 
             Menu {
                 Button("Rename", systemImage: "pencil") { titleFocused = true }
-                Button("Export as Markdown...", systemImage: "square.and.arrow.down") { commands.export(meeting) }
+                Button("Export as Markdown…", systemImage: "square.and.arrow.down") { commands.export(meeting) }
                 Button("Reveal in Finder", systemImage: "folder") { commands.reveal(meeting) }
                 Divider()
-                Button("Delete Meeting...", systemImage: "trash", role: .destructive) { commands.delete(meeting) }
+                Button("Delete Meeting…", systemImage: "trash", role: .destructive) { commands.delete(meeting) }
                     .disabled(isRecording)
             } label: {
                 Label("More", systemImage: "ellipsis")
@@ -211,6 +217,20 @@ struct MeetingDetailView: View {
             .menuIndicator(.hidden)
             .help("More")
         }
+    }
+}
+
+/// Sorting the transcript for the waveform colours is too much work to repeat on every
+/// keystroke in the title field, so it lives in a view that only updates with the meeting.
+private struct MeetingPlaybackBar: View {
+    let meeting: Meeting
+    let playback: PlaybackController
+
+    var body: some View {
+        PlaybackBar(
+            playback: playback,
+            speakers: meeting.sortedLines.map { SpeakerSpan(start: $0.start, end: $0.end, speaker: $0.speaker) }
+        )
     }
 }
 

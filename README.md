@@ -97,6 +97,8 @@ the one part of Memoir where meeting content leaves your Mac.
 | Action | Shortcut |
 | --- | --- |
 | Show Summary / Transcript / Chat | <kbd>⌘</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> |
+| Find in the transcript | <kbd>⌘</kbd><kbd>F</kbd> |
+| Next / previous match | <kbd>⌘</kbd><kbd>G</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> |
 | Play / pause the recording | <kbd>Space</kbd> |
 | Export as Markdown | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd> |
 | Reveal in Finder | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>R</kbd> |
