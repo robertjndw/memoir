@@ -11,6 +11,7 @@ actor AudioRecorder: AudioRecording {
         var system: SystemAudioTap?
         let levels: LevelMonitor
         let startHostTime: UInt64
+        let issues: AsyncStream<RecordingIssue>.Continuation
     }
 
     private enum Phase {
@@ -42,6 +43,8 @@ actor AudioRecorder: AudioRecording {
         let (microphoneStream, microphoneContinuation) = AsyncStream.makeStream(of: CapturedAudio.self, bufferingPolicy: .unbounded)
         let (systemStream, systemContinuation) = AsyncStream.makeStream(of: CapturedAudio.self, bufferingPolicy: .unbounded)
         let (levelStream, levelContinuation) = AsyncStream.makeStream(of: AudioLevels.self, bufferingPolicy: .bufferingNewest(1))
+        let (issueStream, issueContinuation) = AsyncStream.makeStream(of: RecordingIssue.self)
+        let issues = IssueReporter { issueContinuation.yield($0) }
 
         let microphoneAllowed = await MicrophoneCapture.requestAccess()
         // Taken after the permission prompt, which can take arbitrarily long.
@@ -54,7 +57,7 @@ actor AudioRecorder: AudioRecording {
         if microphoneAllowed {
             let capture = MicrophoneCapture(pipeline: SourcePipeline(
                 source: .microphone, folder: folder, startHostTime: startHostTime,
-                continuation: microphoneContinuation, levels: levels
+                continuation: microphoneContinuation, levels: levels, issues: issues
             ))
             do {
                 try await capture.start()
@@ -73,7 +76,7 @@ actor AudioRecorder: AudioRecording {
         var system: SystemAudioTap?
         let tap = SystemAudioTap(pipeline: SourcePipeline(
             source: .system, folder: folder, startHostTime: startHostTime,
-            continuation: systemContinuation, levels: levels
+            continuation: systemContinuation, levels: levels, issues: issues
         ))
         do {
             try await tap.start()
@@ -86,16 +89,21 @@ actor AudioRecorder: AudioRecording {
 
         guard microphone != nil || system != nil else {
             levels.stop()
+            issueContinuation.finish()
             phase = .stopped
             throw microphoneAllowed ? RecordingError.noAudioSource : RecordingError.microphonePermissionDenied
         }
 
-        phase = .recording(Session(microphone: microphone, system: system, levels: levels, startHostTime: startHostTime))
+        phase = .recording(Session(
+            microphone: microphone, system: system, levels: levels, startHostTime: startHostTime,
+            issues: issueContinuation
+        ))
         return CaptureStreams(
             microphone: microphoneStream,
             system: systemStream,
             levels: levelStream,
-            unavailable: unavailable
+            unavailable: unavailable,
+            issues: issueStream
         )
     }
 
@@ -118,6 +126,8 @@ actor AudioRecorder: AudioRecording {
         async let systemParts = session.system?.stop() ?? []
         let segments = await microphoneParts + systemParts
         session.levels.stop()
+        // Both pipelines are finished, so nothing can report any more.
+        session.issues.finish()
 
         let destination = folder.appending(path: Self.audioFileName)
         let fallbackDuration = segments.map(\.end).max() ?? 0

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 
 // The seams between the app spine (AppModel, UI) and the engines (audio, speech, intelligence,
 // detection). The module defaults to MainActor isolation, so everything that runs off the main
@@ -61,6 +62,55 @@ nonisolated struct CaptureStreams: Sendable {
     /// Sources that could not be started (permission denied, no device). Their stream is
     /// already finished. Recording continues with whatever is left.
     let unavailable: Set<AudioSource>
+    /// Problems that come up after capture started. Each issue is sent at most once, and the
+    /// stream finishes when the recording stops.
+    var issues = AsyncStream<RecordingIssue> { $0.finish() }
+}
+
+/// Something went wrong while a recording keeps running. Recording never stops because of
+/// one of these; they only tell the user that part of the audio or live transcript is missing.
+nonisolated enum RecordingIssue: Sendable, Hashable {
+    /// A part file could not be created or written, typically because the disk is full.
+    case audioNotSaved(AudioSource)
+    /// The speech model never became ready, so nothing is transcribed live.
+    case speechModelUnavailable
+    /// The speech model took so long that the oldest audio waiting for it was dropped.
+    case liveTranscriptIncomplete
+    /// The analyzer of one side failed. Its live transcript ends here.
+    case transcriptionStopped(Speaker)
+
+    var message: String {
+        switch self {
+        case .audioNotSaved(.microphone):
+            "Memoir could not save the microphone audio. Check that your Mac has enough free disk space."
+        case .audioNotSaved(.system):
+            "Memoir could not save the system audio. Check that your Mac has enough free disk space."
+        case .speechModelUnavailable:
+            "The speech model is not available, so this meeting has no live transcript. You can transcribe the recording in the Library afterwards."
+        case .liveTranscriptIncomplete:
+            "The speech model took a while to download, so the live transcript is missing the start of the meeting."
+        case .transcriptionStopped(.me):
+            "Live transcription of your microphone stopped. The audio is still being recorded."
+        case .transcriptionStopped:
+            "Live transcription of the other participants stopped. The audio is still being recorded."
+        }
+    }
+}
+
+/// Passes each issue on once, however often it is hit. The same failure tends to repeat for
+/// every buffer, or to hit both sources at the same moment.
+nonisolated final class IssueReporter: Sendable {
+    private let reported = Mutex<Set<RecordingIssue>>([])
+    private let send: @Sendable (RecordingIssue) -> Void
+
+    init(_ send: @escaping @Sendable (RecordingIssue) -> Void) {
+        self.send = send
+    }
+
+    func report(_ issue: RecordingIssue) {
+        guard reported.withLock({ $0.insert(issue).inserted }) else { return }
+        send(issue)
+    }
 }
 
 nonisolated struct RecordingOutput: Sendable {
@@ -112,16 +162,22 @@ nonisolated struct TranscriptUpdate: Sendable {
     let isFinal: Bool
 }
 
+nonisolated enum TranscriptEvent: Sendable {
+    case update(TranscriptUpdate)
+    /// Sent at most once per issue. Updates keep coming for whatever is still transcribed.
+    case issue(RecordingIssue)
+}
+
 /// One transcription run. Single use.
 nonisolated protocol Transcribing: Sendable {
-    /// Returns promptly. If the speech model still has to be downloaded, audio is buffered and
-    /// transcribed once it is ready. The returned stream finishes after `finish()` once all
-    /// final results were delivered.
+    /// Returns promptly. If the speech model still has to be downloaded, the most recent audio
+    /// is buffered and transcribed once it is ready. The returned stream finishes after
+    /// `finish()` once all final results were delivered.
     func start(
         streams: CaptureStreams,
         locale: Locale,
         contextualStrings: [String]
-    ) async throws -> AsyncStream<TranscriptUpdate>
+    ) async throws -> AsyncStream<TranscriptEvent>
 
     /// Call after the audio streams ended. Flushes pending results and ends the update stream.
     func finish() async

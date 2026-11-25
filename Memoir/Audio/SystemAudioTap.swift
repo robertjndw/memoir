@@ -92,26 +92,26 @@ nonisolated final class SystemAudioTap: @unchecked Sendable {
         }
     }
 
+    /// Runs on `queue`, not the IO thread, so allocating here is fine. Buffers are sized to the
+    /// audio that is pending: they travel on to the transcriber, which may hold minutes of
+    /// them while the speech model downloads.
     private func drain(_ session: TapSession) {
         let ring = session.ring
         let format = session.format
-        let capacity = AVAudioFrameCount(format.sampleRate)
         let tolerance = HostClock.ticks(forSeconds: 0.002)
-        while let first = ring.peek() {
-            let size = max(capacity, AVAudioFrameCount(first.frames))
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: size),
+        // Merge back-to-back IO cycles into one buffer of at most a second, but never across a
+        // discontinuity: the buffer's time is that of its first frame.
+        while let first = ring.peek(),
+              let run = ring.contiguousRun(maxFrames: Int(format.sampleRate), sampleRate: format.sampleRate, tolerance: tolerance)
+        {
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(run.frames)),
                   let channels = buffer.floatChannelData
             else { return }
             var filled = 0
-            var expectedHost = first.hostTime
-            // Merge back-to-back IO cycles into one buffer, but never across a discontinuity:
-            // the buffer's time is that of its first frame.
-            while let chunk = ring.peek(), filled + chunk.frames <= Int(size) {
-                let jump = chunk.hostTime > expectedHost ? chunk.hostTime - expectedHost : expectedHost - chunk.hostTime
-                if filled > 0, jump > tolerance { break }
+            for _ in 0..<run.chunks {
+                guard let chunk = ring.peek() else { break }
                 ring.consume(chunk, into: channels, at: filled)
                 filled += chunk.frames
-                expectedHost = chunk.hostTime + HostClock.ticks(forSeconds: Double(chunk.frames) / format.sampleRate)
             }
             buffer.frameLength = AVAudioFrameCount(filled)
             pipeline.process(buffer, hostTime: first.hostTime)

@@ -213,6 +213,12 @@ final class AppModel {
                 self?.levels = levels
             }
         }
+        // Ends by itself: the recorder finishes the stream when it stops.
+        Task { [weak self] in
+            for await issue in streams.issues {
+                self?.errorMessage = issue.message
+            }
+        }
 
         // A recording without a transcript is still worth keeping (it can be transcribed from
         // the file later), so a transcription failure does not abort the recording.
@@ -231,8 +237,11 @@ final class AppModel {
             }
             self.transcriber = transcriber
             updatesTask = Task { [weak self] in
-                for await update in updates {
-                    self?.apply(update, to: meeting)
+                for await event in updates {
+                    switch event {
+                    case .update(let update): self?.apply(update, to: meeting)
+                    case .issue(let issue): self?.errorMessage = issue.message
+                    }
                 }
             }
         } catch {
