@@ -29,33 +29,21 @@
       "translucency": {
         "enabled": false,
         "value": 0.5
-      }
+      },
+      "specular": false
     },
     {
-      "name": "Page",
+      "name": "Lines",
       "layers": [
         {
-          "glass": false,
+          "glass": true,
           "image-name": "Lines.svg",
           "name": "Lines",
           "fill-specializations": [
             {
               "appearance": "dark",
               "value": {
-                "solid": "extended-srgb:0.38824,0.38824,0.40784,1.00000"
-              }
-            }
-          ]
-        },
-        {
-          "glass": true,
-          "image-name": "Page.svg",
-          "name": "Page",
-          "fill-specializations": [
-            {
-              "appearance": "dark",
-              "value": {
-                "solid": "extended-srgb:0.17255,0.17255,0.20392,1.00000"
+                "solid": "extended-srgb:0.38824,0.38824,0.40000,1.00000"
               }
             }
           ]
@@ -63,12 +51,13 @@
       ],
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.5
+        "opacity": 0.45
       },
       "translucency": {
         "enabled": true,
-        "value": 0.15
-      }
+        "value": 0.2
+      },
+      "specular": false
     }
   ],
   "supported-platforms": {
