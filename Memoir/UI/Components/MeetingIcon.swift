@@ -51,7 +51,7 @@ struct PersonAvatar: View {
 
     private static let palette: [Color] = [.blue, .indigo, .purple, .pink, .orange, .teal, .green, .cyan]
 
-    private var initials: String {
+    static func initials(of name: String) -> String {
         let words = name.split(whereSeparator: \.isWhitespace)
         let letters = [words.first, words.count > 1 ? words.last : nil].compactMap { $0?.first }
         return String(letters).uppercased()
@@ -67,7 +67,7 @@ struct PersonAvatar: View {
         Circle()
             .fill(color.gradient)
             .overlay {
-                Text(initials)
+                Text(Self.initials(of: name))
                     .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                     .minimumScaleFactor(0.6)

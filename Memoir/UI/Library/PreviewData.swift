@@ -2,6 +2,7 @@
 import Foundation
 import SwiftData
 import SwiftUI
+import Synchronization
 
 // Debug-only, so previews using any of this need `#if DEBUG` as well or Release won't build.
 //
@@ -63,6 +64,88 @@ extension Services {
     }
 }
 
+extension Services {
+    /// `preview` with optional models that download for real in the canvas, and a transcription
+    /// model that knows every language.
+    static func preview(optionalModels: PreviewOptionalModels) -> Services {
+        var services = Services.preview
+        services.optionalModels = optionalModels
+        services.enhancer = PreviewEnhancer()
+        return services
+    }
+}
+
+/// Optional models that pretend to download. Starts with `installed` on disk, and every
+/// install behaves as `install` says.
+nonisolated final class PreviewOptionalModels: OptionalModelManaging {
+    enum Install: Sendable {
+        /// Counts up over a couple of seconds and installs.
+        case succeed
+        /// Gets partway and fails with this message.
+        case fail(String)
+        /// Stops at this fraction and never finishes, to look at the downloading state.
+        case stall(at: Double)
+    }
+
+    private struct Failure: LocalizedError {
+        let errorDescription: String?
+    }
+
+    private let installed: Mutex<[OptionalModel: Int64]>
+    private let behavior: Install
+
+    init(installed: [OptionalModel: Int64] = [:], install: Install = .succeed) {
+        self.installed = Mutex(installed)
+        behavior = install
+    }
+
+    func isInstalled(_ model: OptionalModel) async -> Bool {
+        installed.withLock { $0[model] != nil }
+    }
+
+    func installedSize(of model: OptionalModel) async -> Int64? {
+        installed.withLock { $0[model] }
+    }
+
+    func install(_ model: OptionalModel) -> AsyncThrowingStream<Double, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                switch self.behavior {
+                case .succeed:
+                    for step in 1...10 {
+                        try? await Task.sleep(for: .milliseconds(200))
+                        guard !Task.isCancelled else {
+                            continuation.finish()
+                            return
+                        }
+                        continuation.yield(Double(step) / 10)
+                    }
+                    self.installed.withLock { $0[model] = model.downloadSize }
+                    continuation.finish()
+                case .fail(let message):
+                    continuation.yield(0.3)
+                    try? await Task.sleep(for: .milliseconds(600))
+                    continuation.finish(throwing: Failure(errorDescription: message))
+                case .stall(let fraction):
+                    continuation.yield(fraction)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func remove(_ model: OptionalModel) async throws {
+        _ = installed.withLock { $0.removeValue(forKey: model) }
+    }
+}
+
+private nonisolated struct PreviewEnhancer: TranscriptEnhancing {
+    func supportsTranscription(in locale: Locale) -> Bool { true }
+    func enhance(_ request: EnhancementRequest) -> AsyncThrowingStream<EnhancementProgress, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+}
+
 private nonisolated struct PreviewIntelligence: Intelligence {
     private struct Session: ChatSessioning {
         func respond(to question: String) -> AsyncThrowingStream<String, Error> {
@@ -115,7 +198,8 @@ private nonisolated struct PreviewIntelligence: Intelligence {
 
 extension Meeting {
     /// Sample meetings for previews: one finished with summary and transcript, one without a
-    /// summary, one from a few days ago with audio but no transcript.
+    /// summary, one from a few days ago with audio but no transcript, and one whose speakers
+    /// were identified, one of them named.
     @discardableResult
     static func samples(in context: ModelContext) -> [Meeting] {
         let now = Date.now
@@ -151,8 +235,29 @@ extension Meeting {
         voiceNote.hasAudio = true
         context.insert(voiceNote)
 
-        return [review, call, voiceNote]
+        let planning = Meeting(title: "Planning Sync", hasCustomTitle: true, startDate: now.addingTimeInterval(-50 * 3600))
+        planning.status = .ready
+        planning.duration = 28 * 60
+        planning.sourceAppName = "Zoom"
+        planning.sourceAppBundleID = "us.zoom.xos"
+        planning.hasAudio = true
+        planning.attendees = ["Maya Chen", "Jonas Weber", "Priya Raman"]
+        planning.speakerNames = [1: "Maya Chen"]
+        add(identifiedLines, to: planning, in: context)
+
+        return [review, call, voiceNote, planning]
     }
+
+    /// A call whose other side was split into three voices.
+    static let identifiedLines: [TranscriptLine] = [
+        TranscriptLine(speaker: .me, start: 1, end: 6, text: "Morning everyone. Let's go through the plan for next quarter."),
+        TranscriptLine(speaker: .others, start: 7, end: 13, text: "I drafted the roadmap. Onboarding is the first big item.", voice: 1),
+        TranscriptLine(speaker: .others, start: 14, end: 19, text: "We should keep it to three steps like we said.", voice: 1),
+        TranscriptLine(speaker: .others, start: 20, end: 26, text: "From the support side, the permissions step causes most tickets.", voice: 2),
+        TranscriptLine(speaker: .me, start: 27, end: 31, text: "Good to know. Can you send me the numbers?"),
+        TranscriptLine(speaker: .others, start: 32, end: 38, text: "I can pull those together by Thursday.", voice: 3),
+        TranscriptLine(speaker: .others, start: 39, end: 44, text: "And I'll add the five most common questions.", voice: 2),
+    ]
 
     /// A short two-speaker exchange, also used as the live transcript of a preview recording.
     static let sampleLines: [TranscriptLine] = [

@@ -229,7 +229,7 @@ private struct PlaybackSpaceKey: NSViewRepresentable {
 #Preview("Playing") {
     PlaybackBar(
         playback: .preview(at: 754, of: 42 * 60, playing: true),
-        speakers: (0..<21).map { SpeakerSpan(start: Double($0) * 120, end: Double($0) * 120 + 110, speaker: $0.isMultiple(of: 3) ? .me : .others) }
+        speakers: (0..<21).map { SpeakerSpan(start: Double($0) * 120, end: Double($0) * 120 + 110, speaker: SpeakerID(speaker: $0.isMultiple(of: 3) ? .me : .others)) }
     )
         .frame(width: 720)
         .padding(.top, 40)

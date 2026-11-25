@@ -122,30 +122,6 @@ private struct ChatPane: View {
     }
 }
 
-private struct ErrorRow: View {
-    let message: String
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .accessibilityHidden(true)
-            Text(message).font(.callout)
-            Spacer(minLength: 8)
-            Button(action: dismiss) {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Dismiss")
-        }
-        .padding(10)
-        .background(.regularMaterial, in: .rect(cornerRadius: 12))
-        .accessibilityElement(children: .contain)
-    }
-}
-
 #if DEBUG
 #Preview("Ask Memoir") {
     @Previewable @State var model = AppModel.preview(samples: true)

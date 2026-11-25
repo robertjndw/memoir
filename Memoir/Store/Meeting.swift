@@ -30,6 +30,9 @@ final class Meeting {
     /// Completed summary action items, keyed by task text instead of index so they survive
     /// regenerating the summary. Leftover entries are harmless.
     var completedActionItems: [String] = []
+    /// Names the user gave to identified speakers, as JSON keyed by voice number. Optional
+    /// with no default for the same lightweight migration as `mutedRangesData`.
+    var speakerNamesData: Data?
 
     @Relationship(deleteRule: .cascade, inverse: \TranscriptSegment.meeting)
     var segments: [TranscriptSegment] = []
@@ -70,9 +73,22 @@ final class Meeting {
         set { mutedRangesData = newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue) }
     }
 
-    /// Relationship arrays are unordered, so always read the transcript through this.
+    var speakerNames: [Int: String] {
+        get { speakerNamesData.flatMap { try? JSONDecoder().decode([Int: String].self, from: $0) } ?? [:] }
+        set { speakerNamesData = newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue) }
+    }
+
+    /// Relationship arrays are unordered, so always read the transcript through this. It is
+    /// also where lines get their speaker names.
     var sortedLines: [TranscriptLine] {
-        segments.map(\.line).sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+        let names = speakerNames
+        return segments
+            .map { segment in
+                var line = segment.line
+                line.name = line.voice.flatMap { names[$0] }
+                return line
+            }
+            .sorted { ($0.start, $0.end) < ($1.start, $1.end) }
     }
 
     var audioURL: URL? {
@@ -94,6 +110,8 @@ final class TranscriptSegment {
     var start: TimeInterval
     var end: TimeInterval
     var text: String
+    /// `TranscriptLine.voice`. Optional with no default so existing stores migrate.
+    var voiceIndex: Int?
     var meeting: Meeting?
 
     init(line: TranscriptLine) {
@@ -102,12 +120,13 @@ final class TranscriptSegment {
         start = line.start
         end = line.end
         text = line.text
+        voiceIndex = line.voice
     }
 
     var speaker: Speaker { Speaker(rawValue: speakerRaw) ?? .unknown }
 
     var line: TranscriptLine {
-        TranscriptLine(id: id, speaker: speaker, start: start, end: end, text: text)
+        TranscriptLine(id: id, speaker: speaker, start: start, end: end, text: text, voice: voiceIndex)
     }
 }
 

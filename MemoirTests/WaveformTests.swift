@@ -4,17 +4,18 @@ import Testing
 @testable import Memoir
 
 struct WaveformTests {
-    private let spans = [
-        SpeakerSpan(start: 0, end: 5, speaker: .me),
-        SpeakerSpan(start: 10, end: 20, speaker: .others),
-    ]
+    private let me = SpeakerID(speaker: .me)
+    private let others = SpeakerID(speaker: .others)
+    private var spans: [SpeakerSpan] {
+        [SpeakerSpan(start: 0, end: 5, speaker: me), SpeakerSpan(start: 10, end: 20, speaker: others)]
+    }
 
     @Test func speakerLookupBridgesShortPausesOnly() {
-        #expect(SpeakerSpan.speaker(at: 2, in: spans) == .me)
+        #expect(SpeakerSpan.speaker(at: 2, in: spans) == me)
         // Within the grace period after a line ends, the turn still belongs to that speaker.
-        #expect(SpeakerSpan.speaker(at: 6, in: spans) == .me)
+        #expect(SpeakerSpan.speaker(at: 6, in: spans) == me)
         #expect(SpeakerSpan.speaker(at: 8, in: spans) == nil)
-        #expect(SpeakerSpan.speaker(at: 10, in: spans) == .others)
+        #expect(SpeakerSpan.speaker(at: 10, in: spans) == others)
         #expect(SpeakerSpan.speaker(at: 30, in: spans) == nil)
         #expect(SpeakerSpan.speaker(at: 1, in: []) == nil)
     }

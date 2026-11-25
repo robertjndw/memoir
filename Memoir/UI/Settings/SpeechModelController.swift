@@ -18,6 +18,17 @@ final class SpeechModelController {
 
     var isDownloading: Bool { task != nil }
 
+    var availability: ModelAvailability {
+        switch status {
+        case nil: .checking
+        case .unsupported: .unsupported
+        case .notInstalled: .notInstalled
+        case .downloading: .downloading(progress)
+        // The system manages these assets and doesn't report their size.
+        case .installed: .installed(size: nil)
+        }
+    }
+
     /// Re-reads the status for `locale`, which becomes the selected one. A download for the same
     /// locale already says all there is to know, but one for another locale must not block this.
     func refresh(locale: Locale, using models: any SpeechModelManaging) async {

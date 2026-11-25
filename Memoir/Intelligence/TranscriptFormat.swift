@@ -20,9 +20,12 @@ nonisolated enum TranscriptFormat {
     }
 
     /// One compact line: `[mm:ss] Speaker: text`, with whitespace collapsed. `othersName`
-    /// replaces the "Others" label when the other side is known to be one person.
+    /// replaces the "Others" label when the other side is known to be one person. It never
+    /// overrides an identified or named speaker: with several voices on the other side, the
+    /// single invitee is not necessarily the one talking.
     static func render(_ line: TranscriptLine, othersName: String? = nil) -> String {
-        let label = line.speaker == .others ? (othersName ?? line.speaker.label) : line.speaker.label
+        let isPlainOthers = line.speaker == .others && line.voice == nil && line.name == nil
+        let label = isPlainOthers ? (othersName ?? line.label) : line.label
         return "\(citation(line.start)) \(label): \(collapseWhitespace(line.text))"
     }
 

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftData
 import SwiftUI
 
@@ -222,18 +223,73 @@ struct MeetingDetailView: View {
             )
             .help("Share")
 
-            Menu {
-                Button("Rename", systemImage: "pencil") { titleFocused = true }
-                Button("Export as Markdown…", systemImage: "square.and.arrow.down") { commands.export(meeting) }
-                Button("Reveal in Finder", systemImage: "folder") { commands.reveal(meeting) }
+            MoreMenu(meeting: meeting, rename: { titleFocused = true })
+        }
+    }
+}
+
+/// Its own view because it watches the transcription work on the meeting, which reports
+/// progress many times a second and shouldn't redraw the whole detail view each time.
+private struct MoreMenu: View {
+    let meeting: Meeting
+    let rename: () -> Void
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.meetingCommands) private var commands
+    @State private var canIdentifySpeakers = false
+    @State private var installCheck = 0
+
+    private struct InstallCheck: Hashable {
+        var enabled: Bool
+        var generation: Int
+    }
+
+    private var isBusy: Bool {
+        model.activeMeetingID == meeting.id
+            || model.retranscribing.contains(meeting.id)
+            || model.enhancing[meeting.id] != nil
+    }
+
+    var body: some View {
+        Menu {
+            Button("Rename", systemImage: "pencil", action: rename)
+            Button("Export as Markdown…", systemImage: "square.and.arrow.down") { commands.export(meeting) }
+            Button("Reveal in Finder", systemImage: "folder") { commands.reveal(meeting) }
+            if meeting.audioURL != nil {
                 Divider()
-                Button("Delete Meeting…", systemImage: "trash", role: .destructive) { commands.delete(meeting) }
-                    .disabled(model.activeMeetingID == meeting.id)
-            } label: {
-                Label("More", systemImage: "ellipsis")
+                // Only offered when it can do something, so the menu doesn't advertise a
+                // feature that is switched off in Settings.
+                if canIdentifySpeakers, !meeting.segments.isEmpty {
+                    Button("Identify Speakers", systemImage: "person.2") {
+                        Task { await model.identifySpeakers(in: meeting) }
+                    }
+                    .disabled(isBusy)
+                }
+                // Always there with audio: without the optional model it uses Apple's.
+                Button("Transcribe Again", systemImage: "waveform") {
+                    Task { await model.retranscribe(meeting) }
+                }
+                .disabled(isBusy)
             }
-            .menuIndicator(.hidden)
-            .help("More")
+            Divider()
+            Button("Delete Meeting…", systemImage: "trash", role: .destructive) { commands.delete(meeting) }
+                .disabled(model.activeMeetingID == meeting.id)
+        } label: {
+            Label("More", systemImage: "ellipsis")
+        }
+        .menuIndicator(.hidden)
+        .help("More")
+        // The model is usually installed from Settings, so look again whenever a window
+        // comes forward, which includes this one after Settings closes.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            installCheck += 1
+        }
+        .task(id: InstallCheck(enabled: model.settings.identifySpeakers, generation: installCheck)) {
+            guard model.settings.identifySpeakers else {
+                canIdentifySpeakers = false
+                return
+            }
+            canIdentifySpeakers = await model.services.optionalModels.isInstalled(.speakerIdentification)
         }
     }
 }
@@ -247,7 +303,7 @@ private struct MeetingPlaybackBar: View {
     var body: some View {
         PlaybackBar(
             playback: playback,
-            speakers: meeting.sortedLines.map { SpeakerSpan(start: $0.start, end: $0.end, speaker: $0.speaker) }
+            speakers: meeting.sortedLines.map { SpeakerSpan(start: $0.start, end: $0.end, speaker: $0.speakerID) }
         )
     }
 }

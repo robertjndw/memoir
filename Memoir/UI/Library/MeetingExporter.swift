@@ -49,7 +49,7 @@ nonisolated enum MeetingExporter {
             out.append("_No transcript._")
         } else {
             for line in lines {
-                out.append("[\(LibraryFormat.timecode(line.start))] **\(line.speaker.label):** \(line.text)")
+                out.append("[\(LibraryFormat.timecode(line.start))] **\(line.label):** \(line.text)")
                 out.append("")
             }
         }

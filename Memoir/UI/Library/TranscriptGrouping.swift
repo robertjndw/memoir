@@ -2,7 +2,7 @@ import Foundation
 
 nonisolated struct TranscriptBlock: Identifiable, Equatable {
     var id: UUID { lines[0].id }
-    var speaker: Speaker
+    var speaker: SpeakerID
     var lines: [TranscriptLine]
     var start: TimeInterval { lines[0].start }
 }
@@ -56,14 +56,15 @@ nonisolated enum TranscriptGrouping {
     /// in sync, while highlighting late always reads as lagging.
     static let highlightLead: TimeInterval = 0.1
 
-    /// Consecutive lines of the same speaker become one block.
+    /// Consecutive lines of the same person become one block. Two identified voices on the
+    /// other side are different people even though both are `.others`.
     static func blocks(_ lines: [TranscriptLine]) -> [TranscriptBlock] {
         var blocks: [TranscriptBlock] = []
         for line in lines {
-            if let last = blocks.last, last.speaker == line.speaker {
+            if let last = blocks.last, last.speaker == line.speakerID {
                 blocks[blocks.count - 1].lines.append(line)
             } else {
-                blocks.append(TranscriptBlock(speaker: line.speaker, lines: [line]))
+                blocks.append(TranscriptBlock(speaker: line.speakerID, lines: [line]))
             }
         }
         return blocks
@@ -81,7 +82,7 @@ nonisolated enum TranscriptGrouping {
                 rows.append(TranscriptRow(marker: markers[nextMarker]))
                 nextMarker += 1
             }
-            rows.append(TranscriptRow(line: line, startsBlock: rows.last?.line?.speaker != line.speaker))
+            rows.append(TranscriptRow(line: line, startsBlock: rows.last?.line?.speakerID != line.speakerID))
         }
         for marker in markers[nextMarker...] {
             rows.append(TranscriptRow(marker: marker))

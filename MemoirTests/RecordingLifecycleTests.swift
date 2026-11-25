@@ -100,7 +100,7 @@ private actor FakeTranscriber: Transcribing {
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         var services = Services.inert
-        services.makeRecorder = { FakeRecorder(folder: $0, stopGate: stopGate, failMixdown: failMixdown) }
+        services.makeRecorder = { folder, _ in FakeRecorder(folder: folder, stopGate: stopGate, failMixdown: failMixdown) }
         services.makeTranscriber = transcriber
         return AppModel(settings: AppSettings(defaults: defaults), container: .memoir(inMemory: true), services: services)
     }

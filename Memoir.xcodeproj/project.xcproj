@@ -17,6 +17,13 @@
       "version": {
         "up-to-next-major-version": "2.10.1",
       },
+    }, {
+      "kind": "remote",
+      "repository": "https://github.com/FluidInference/FluidAudio",
+      "version": {
+        "version-range": "0.18.4..<0.18.5",
+      },
+      "traits": [ "Diarizer" ],
     },
   ],
   "files": [
@@ -56,6 +63,10 @@
       ],
       "package-product-members": [
         {
+          "package": "FluidAudio",
+          "product-name": "FluidAudio",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
           "package": "Sparkle",
           "product-name": "Sparkle",
           "build-phase": { "build-phase": "frameworks" },

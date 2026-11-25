@@ -31,6 +31,16 @@ import Testing
         #expect(TranscriptFormat.render(line, othersName: "Priya") == "[01:05] You: Ship it on Friday")
     }
 
+    @Test func identifiedAndNamedSpeakersWinOverOthersName() {
+        let voice = TranscriptLine(speaker: .others, start: 5, end: 8, text: "Fine", voice: 2)
+        #expect(TranscriptFormat.render(voice) == "[00:05] Speaker 2: Fine")
+        #expect(TranscriptFormat.render(voice, othersName: "Priya") == "[00:05] Speaker 2: Fine")
+        let named = TranscriptLine(speaker: .others, start: 5, end: 8, text: "Fine", voice: 2, name: "Dana")
+        #expect(TranscriptFormat.render(named, othersName: "Priya") == "[00:05] Dana: Fine")
+        let plain = TranscriptLine(speaker: .others, start: 5, end: 8, text: "Fine")
+        #expect(TranscriptFormat.render(plain, othersName: "Priya") == "[00:05] Priya: Fine")
+    }
+
     @Test func parsesCitationsRoundTrip() {
         let text = "Launch moved [12:04], confirmed later [1:02:05]. Not a citation: [99] or [ab:cd]."
         #expect(TranscriptFormat.citations(in: text) == [724, 3725])
@@ -388,6 +398,17 @@ import Testing
         #expect(summary.keyPoints == ["A", "B"])
         #expect(summary.decisions.isEmpty)
         #expect(summary.actionItems == [.init(task: "Write notes", owner: nil)])
+    }
+
+    @Test func summaryCleanupKeepsNumberedSpeakerOwners() throws {
+        let generated = try GeneratedSummary(GeneratedContent(json: """
+            {"overview": "We met.", "title": "Review", "keyPoints": [], "decisions": [],
+             "actionItems": [{"task": "Send the deck", "owner": "Speaker 2"},
+                             {"task": "Book a room", "owner": "Speaker"},
+                             {"task": "Call back", "owner": "Others"}]}
+            """))
+        let owners = MeetingSummary(generated).actionItems.map(\.owner)
+        #expect(owners == ["Speaker 2", nil, nil])
     }
 }
 

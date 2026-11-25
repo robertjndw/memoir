@@ -3,9 +3,12 @@ import Foundation
 /// Everything AppModel needs from the engines. `live` wires the real implementations,
 /// `inert` is for previews and tests.
 struct Services {
-    var makeRecorder: (_ folder: URL) -> any AudioRecording
+    /// `keepTracks` asks for the per-source files in `RecordingOutput.tracks`.
+    var makeRecorder: (_ folder: URL, _ keepTracks: Bool) -> any AudioRecording
     var makeTranscriber: () -> any Transcribing
     var speechModels: any SpeechModelManaging
+    var optionalModels: any OptionalModelManaging
+    var enhancer: any TranscriptEnhancing
     var intelligence: any Intelligence
     var calendar: any CalendarProviding
     var detector: any MeetingDetecting
@@ -15,9 +18,11 @@ struct Services {
 extension Services {
     static var inert: Services {
         Services(
-            makeRecorder: { _ in InertRecorder() },
+            makeRecorder: { _, _ in InertRecorder() },
             makeTranscriber: { InertTranscriber() },
             speechModels: InertSpeechModels(),
+            optionalModels: InertOptionalModels(),
+            enhancer: InertEnhancer(),
             intelligence: InertIntelligence(),
             calendar: InertCalendar(),
             detector: InertDetector(),
@@ -48,6 +53,22 @@ private nonisolated struct InertSpeechModels: SpeechModelManaging {
     func supportedLocales() async -> [Locale] { [Locale(identifier: "en_US")] }
     func status(for locale: Locale) async -> SpeechModelStatus { .installed }
     func install(locale: Locale) -> AsyncThrowingStream<Double, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+}
+
+nonisolated struct InertOptionalModels: OptionalModelManaging {
+    func isInstalled(_ model: OptionalModel) async -> Bool { false }
+    func installedSize(of model: OptionalModel) async -> Int64? { nil }
+    func install(_ model: OptionalModel) -> AsyncThrowingStream<Double, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+    func remove(_ model: OptionalModel) async throws {}
+}
+
+nonisolated struct InertEnhancer: TranscriptEnhancing {
+    func supportsTranscription(in locale: Locale) -> Bool { false }
+    func enhance(_ request: EnhancementRequest) -> AsyncThrowingStream<EnhancementProgress, Error> {
         AsyncThrowingStream { $0.finish() }
     }
 }

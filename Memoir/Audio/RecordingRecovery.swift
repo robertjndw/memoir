@@ -24,6 +24,43 @@ nonisolated enum RecordingRecovery {
         return PartName(source: source, index: index, offset: Double(millis) / 1000)
     }
 
+    /// Per-source tracks are named `track-<source>.caf`. They are scratch files for the models
+    /// that run after a recording, so anything found at launch is a leftover.
+    static let trackPrefix = "track-"
+
+    /// Removes leftover tracks, and the temporary file of a render cut short, from `folder`.
+    static func removeStaleTracks(in folder: URL) {
+        let contents = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        for url in contents where isTrack(url.lastPathComponent) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// Cleans every meeting folder under the recordings directory except `skipping`, which must
+    /// hold the meetings being recorded or processed right now: their tracks and parts are in
+    /// use. This is the entry point for finished meetings, which `recover` never visits.
+    ///
+    /// Besides tracks, it removes parts sitting next to a complete `audio.m4a`. The recorder
+    /// keeps them past the mixdown when tracks are wanted, and an app that ends before they are
+    /// rendered leaves them behind in a meeting that already has its audio.
+    static func removeStaleTracks(skipping: Set<UUID>, recordings: URL? = nil) {
+        let root = recordings ?? RecordingFiles.baseDirectory.appending(path: "Recordings", directoryHint: .isDirectory)
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        for folder in folders {
+            if let id = UUID(uuidString: folder.lastPathComponent), skipping.contains(id) { continue }
+            removeStaleTracks(in: folder)
+            if duration(of: folder.appending(path: AudioRecorder.audioFileName)) != nil {
+                for url in partURLs(in: folder) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+        }
+    }
+
+    private static func isTrack(_ fileName: String) -> Bool {
+        fileName.hasSuffix(".caf") && (fileName.hasPrefix(trackPrefix) || fileName.hasPrefix(".\(trackPrefix)"))
+    }
+
     static func hasParts(in folder: URL) -> Bool {
         !partURLs(in: folder).isEmpty
     }
@@ -59,6 +96,7 @@ nonisolated enum RecordingRecovery {
     }
 
     static func recoverNow(folder: URL) throws -> TimeInterval? {
+        removeStaleTracks(in: folder)
         let destination = folder.appending(path: AudioRecorder.audioFileName)
         // The mixdown moves its file into place only once it is complete, so an existing one
         // is whole. This is a run that was interrupted after mixing, before removing the parts.

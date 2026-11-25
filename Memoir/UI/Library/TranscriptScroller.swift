@@ -11,6 +11,8 @@ struct TranscriptScroller: View {
     let focusedMatch: UUID?
     let isLive: Bool
     var playback: PlaybackController
+    /// For naming identified speakers. Nil while live.
+    var meeting: Meeting?
 
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -42,7 +44,8 @@ struct TranscriptScroller: View {
                                     query: query,
                                     isFocusedMatch: row.id == focusedMatch,
                                     emphasis: emphasis(for: row.id, current: current),
-                                    playback: tracksPlayback ? playback : nil
+                                    playback: tracksPlayback ? playback : nil,
+                                    meeting: isLive ? nil : meeting
                                 )
                             case .muted(let range):
                                 MutedMarkerRow(range: range)

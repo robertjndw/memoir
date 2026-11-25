@@ -2,7 +2,7 @@ import Accelerate
 import AVFoundation
 
 /// Mixes the part files of both sources into one mono AAC file, each part placed at its
-/// offset on the shared timeline.
+/// offset on the shared timeline, or renders one source alone the same way.
 ///
 /// Done by hand with AVAudioFile and AVAudioConverter rather than AVMutableComposition and an
 /// export session: the export presets offer no bitrate control, and the reader/writer route
@@ -18,25 +18,62 @@ nonisolated enum AudioMixdown {
         case conversionFailed
     }
 
+    /// Sample rate of the per-source tracks the post-recording speech models consume.
+    static let trackSampleRate: Double = 16_000
+
     /// Writes `destination` and returns the mixed duration, or nil if there was no audio.
     /// Writes to a temporary sibling first so a failed mix never leaves a truncated file.
     static func mix(_ segments: [PartSegment], to destination: URL) throws -> TimeInterval? {
         guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
             throw MixdownError.unsupportedFormat
         }
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: bitRate,
+        ]
+        return try render(segments, format: outputFormat, settings: settings, to: destination)
+    }
+
+    /// Renders the parts of one source into a 16 kHz mono 16-bit PCM CAF on the same timeline as
+    /// the mix: a part at offset 12.5 s starts 12.5 s in, gaps are silence. Returns the track
+    /// duration, or nil if there was no audio. Same temporary-sibling safety as `mix`.
+    static func renderTrack(_ segments: [PartSegment], to destination: URL) throws -> TimeInterval? {
+        guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: trackSampleRate, channels: 1) else {
+            throw MixdownError.unsupportedFormat
+        }
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: trackSampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        return try render(segments, format: outputFormat, settings: settings, to: destination)
+    }
+
+    private static func render(
+        _ segments: [PartSegment],
+        format: AVAudioFormat,
+        settings: [String: Any],
+        to destination: URL
+    ) throws -> TimeInterval? {
         let readers = try segments
             .filter { $0.frames > 0 }
-            .map { try SegmentReader(segment: $0, outputFormat: outputFormat) }
+            .map { try SegmentReader(segment: $0, outputFormat: format) }
             .filter { $0.expectedFrames > 0 }
         guard let totalFrames = readers.map({ $0.startFrame + $0.expectedFrames }).max(), totalFrames > 0 else {
             return nil
         }
 
         let temporary = destination.deletingLastPathComponent()
-            .appending(path: ".\(destination.deletingPathExtension().lastPathComponent)-mixing.m4a")
+            .appending(path: ".\(destination.deletingPathExtension().lastPathComponent)-mixing.\(destination.pathExtension)")
         try? FileManager.default.removeItem(at: temporary)
         do {
-            try write(readers: readers, totalFrames: totalFrames, format: outputFormat, to: temporary)
+            try write(readers: readers, totalFrames: totalFrames, settings: settings, to: temporary)
             if FileManager.default.fileExists(atPath: destination.path) {
                 _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
             } else {
@@ -46,25 +83,20 @@ nonisolated enum AudioMixdown {
             try? FileManager.default.removeItem(at: temporary)
             throw error
         }
-        return Double(totalFrames) / sampleRate
+        return Double(totalFrames) / format.sampleRate
     }
 
     private static func write(
         readers: [SegmentReader],
         totalFrames: AVAudioFramePosition,
-        format: AVAudioFormat,
+        settings: [String: Any],
         to url: URL
     ) throws {
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: bitRate,
-        ]
         let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
         defer { file.close() }
 
-        let blockSize = AVAudioFrameCount(sampleRate)
+        // One second per block, whatever the rate, so memory does not depend on the recording length.
+        let blockSize = AVAudioFrameCount(file.processingFormat.sampleRate)
         guard let block = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: blockSize),
               let samples = block.floatChannelData?[0]
         else { throw MixdownError.unsupportedFormat }

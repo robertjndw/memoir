@@ -123,7 +123,7 @@ extension AppModel {
             guard let meeting = meeting(with: id) else { return }
             log.info("debug recording done duration=\(meeting.duration) hasAudio=\(meeting.hasAudio) lines=\(meeting.segments.count)")
             for line in meeting.sortedLines {
-                log.info("debug line [\(line.start, format: .fixed(precision: 1))-\(line.end, format: .fixed(precision: 1))] \(line.speaker.label, privacy: .public): \(line.text, privacy: .public)")
+                log.info("debug line [\(line.start, format: .fixed(precision: 1))-\(line.end, format: .fixed(precision: 1))] \(line.label, privacy: .public): \(line.text, privacy: .public)")
             }
         }
     }
