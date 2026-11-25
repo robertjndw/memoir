@@ -33,13 +33,21 @@ struct TranscriptScroller: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(rows) { row in
-                        TranscriptLineRow(
-                            row: row,
-                            query: query,
-                            isFocusedMatch: row.id == focusedMatch,
-                            emphasis: emphasis(for: row.id, current: current),
-                            playback: tracksPlayback ? playback : nil
-                        )
+                        Group {
+                            switch row.content {
+                            case .line(let line):
+                                TranscriptLineRow(
+                                    line: line,
+                                    startsBlock: row.startsBlock,
+                                    query: query,
+                                    isFocusedMatch: row.id == focusedMatch,
+                                    emphasis: emphasis(for: row.id, current: current),
+                                    playback: tracksPlayback ? playback : nil
+                                )
+                            case .muted(let range):
+                                MutedMarkerRow(range: range)
+                            }
+                        }
                         .padding(.top, row.startsBlock && row.id != firstID ? 14 : 0)
                     }
                     if isLive {

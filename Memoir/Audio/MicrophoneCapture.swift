@@ -59,6 +59,16 @@ nonisolated final class MicrophoneCapture: @unchecked Sendable {
         }
     }
 
+    /// Lives on the pipeline rather than the engine so it survives engine rebuilds.
+    func setMuted(_ muted: Bool) async {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.pipeline.isMuted = muted
+                continuation.resume()
+            }
+        }
+    }
+
     // MARK: - Queue confined
 
     private func startEngine() throws {

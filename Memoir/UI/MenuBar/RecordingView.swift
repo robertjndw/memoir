@@ -19,21 +19,53 @@ struct RecordingView: View {
                     .transition(.blurReplace)
             }
 
+            if model.isMicrophoneMuted {
+                MutedNotice()
+                    .transition(.blurReplace)
+            }
+
             TranscriptTail(lines: model.liveLines, volatile: model.volatileText)
 
-            Button {
-                Task { await model.stopRecording() }
-            } label: {
-                Label("Stop Recording", systemImage: "stop.fill")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                if !model.unavailableSources.contains(.microphone) {
+                    MuteButton()
+                }
+                Button {
+                    Task { await model.stopRecording() }
+                } label: {
+                    Label("Stop Recording", systemImage: "stop.fill")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(.red)
+                .controlSize(.large)
+                .accessibilityLabel("Stop recording")
             }
-            .buttonStyle(.glassProminent)
-            .tint(.red)
-            .controlSize(.large)
-            .accessibilityLabel("Stop recording")
         }
         .animation(.smooth(duration: 0.3), value: model.unavailableSources)
+        .animation(.smooth(duration: 0.3), value: model.isMicrophoneMuted)
+    }
+}
+
+private struct MuteButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let muted = model.isMicrophoneMuted
+        Button {
+            Task { await model.toggleMicrophoneMuted() }
+        } label: {
+            Image(systemName: muted ? "mic.slash.fill" : "mic.fill")
+                .font(.body.weight(.semibold))
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .keyboardShortcut("m", modifiers: [.command, .shift])
+        .help(muted ? "Unmute Microphone (⇧⌘M)" : "Mute Microphone (⇧⌘M)")
+        .accessibilityLabel(muted ? "Unmute microphone" : "Mute microphone")
+        .accessibilityHint("Others are recorded either way")
     }
 }
 
@@ -97,20 +129,25 @@ private struct SourceLegend: View {
         level: Float
     ) -> some View {
         let unavailable = model.unavailableSources.contains(source)
+        let muted = source == .microphone && model.isMicrophoneMuted
         return HStack(spacing: 5) {
             Circle()
                 .fill(speakerColor(source == .microphone ? .me : .others))
                 .frame(width: 6, height: 6)
-            Image(systemName: unavailable ? mutedSymbol : symbol)
+            Image(systemName: unavailable || muted ? mutedSymbol : symbol)
                 .contentTransition(.symbolEffect(.replace))
             Text(label)
         }
-        .opacity(unavailable ? 0.5 : 1)
+        .opacity(unavailable || muted ? 0.5 : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(source == .microphone ? "Microphone level" : "System audio level")
-        .accessibilityValue(unavailable
-            ? Text("Not recording")
-            : Text(Double(level), format: .percent.precision(.fractionLength(0))))
+        .accessibilityValue(value(unavailable: unavailable, muted: muted, level: level))
+    }
+
+    private func value(unavailable: Bool, muted: Bool, level: Float) -> Text {
+        if unavailable { return Text("Not recording") }
+        if muted { return Text("Muted") }
+        return Text(Double(level), format: .percent.precision(.fractionLength(0)))
     }
 }
 
@@ -176,6 +213,23 @@ struct SourceWarning: View {
     }
 }
 
+/// Not a SourceWarning, since muting is on purpose.
+struct MutedNotice: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            Text("Your microphone is muted. Others are still recorded.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 #if DEBUG
 #Preview("Recording") {
     @Previewable @State var model = AppModel.preview {
@@ -194,6 +248,21 @@ struct SourceWarning: View {
             elapsed: 12,
             levels: AudioLevels(microphone: 0.4, system: 0),
             unavailable: [.system]
+        )
+    }
+    RecordingView()
+        .environment(model)
+        .padding()
+        .frame(width: 320)
+}
+
+#Preview("Microphone muted") {
+    @Previewable @State var model = AppModel.preview {
+        $0.simulateRecording(
+            Meeting(title: "Design Review"),
+            lines: Meeting.sampleLines,
+            levels: AudioLevels(microphone: 0, system: 0.3),
+            microphoneMuted: true
         )
     }
     RecordingView()

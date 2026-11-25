@@ -81,10 +81,21 @@ nonisolated enum RecordingError: LocalizedError {
     }
 }
 
+/// A stretch of the recording where the user muted their microphone in Memoir. Seconds from
+/// the start of the recording, on the same clock as transcript lines.
+nonisolated struct MutedRange: Codable, Sendable, Hashable {
+    var start: TimeInterval
+    var end: TimeInterval
+}
+
 /// One recording. Instances are single use: `start` once, `stop` once.
 nonisolated protocol AudioRecording: Sendable {
     /// Starts capture and writing to disk. Throws only if no source at all could start.
     func start() async throws -> CaptureStreams
+    /// Replaces microphone audio with silence (file, meter and stream) while muted. System
+    /// audio is never affected. Returns the recording time the change took effect, or nil
+    /// when not recording or there is no microphone.
+    func setMicrophoneMuted(_ muted: Bool) async -> TimeInterval?
     /// Stops capture, finishes all streams, and produces the final audio file.
     func stop() async -> RecordingOutput
 }

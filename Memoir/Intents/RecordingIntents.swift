@@ -39,6 +39,27 @@ struct StopRecordingIntent: AppIntent {
     }
 }
 
+struct ToggleMicrophoneMuteIntent: AppIntent {
+    static let title: LocalizedStringResource = "Mute or Unmute Microphone"
+    static let description = IntentDescription("Mutes or unmutes your microphone in the current Memoir recording. Others are still recorded.")
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let model = AppModel.shared
+        guard model.isRecording else {
+            return .result(dialog: "Memoir is not recording.")
+        }
+        guard !model.unavailableSources.contains(.microphone) else {
+            return .result(dialog: "Memoir is not recording your microphone.")
+        }
+        await model.toggleMicrophoneMuted()
+        if model.isMicrophoneMuted {
+            return .result(dialog: "Microphone muted.")
+        }
+        return .result(dialog: "Microphone unmuted.")
+    }
+}
+
 enum RecordingIntentError: Error, CustomLocalizedStringResourceConvertible {
     case couldNotStart(String?)
 
@@ -63,6 +84,16 @@ struct MemoirShortcuts: AppShortcutsProvider {
             phrases: ["Stop recording in \(.applicationName)", "Stop the \(.applicationName) recording"],
             shortTitle: "Stop Recording",
             systemImageName: "stop.circle"
+        )
+        AppShortcut(
+            intent: ToggleMicrophoneMuteIntent(),
+            phrases: [
+                "Mute me in \(.applicationName)",
+                "Unmute me in \(.applicationName)",
+                "Mute my microphone in \(.applicationName)",
+            ],
+            shortTitle: "Mute or Unmute",
+            systemImageName: "mic.slash"
         )
     }
 }

@@ -46,6 +46,8 @@ final class AppModel {
     /// Text still being revised by the recognizer, per speaker.
     private(set) var volatileText: [Speaker: String] = [:]
     private(set) var unavailableSources: Set<AudioSource> = []
+    /// The microphone is recorded as silence. System audio is unaffected.
+    private(set) var isMicrophoneMuted = false
     var errorMessage: String?
 
     private(set) var upcomingMeeting: CalendarMeeting?
@@ -67,6 +69,9 @@ final class AppModel {
     @ObservationIgnored private var transcriber: (any Transcribing)?
     @ObservationIgnored private var levelsTask: Task<Void, Never>?
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
+    /// Recording time the current mute began. Only closed ranges are stored on the meeting.
+    @ObservationIgnored private var mutedSince: TimeInterval?
+    @ObservationIgnored private var isChangingMute = false
     @ObservationIgnored private var backgroundTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var chats: [ChatScope: ChatController] = [:]
     @ObservationIgnored private var regularWindowCount = 0
@@ -192,6 +197,10 @@ final class AppModel {
         context.insert(meeting)
         self.recorder = recorder
         unavailableSources = streams.unavailable
+        // Never carried over: a mute left on from the last call would silently lose the
+        // user's side of this one.
+        isMicrophoneMuted = false
+        mutedSince = nil
         liveLines = []
         volatileText = [:]
         levels = AudioLevels()
@@ -248,6 +257,7 @@ final class AppModel {
             let elapsed = recordingStartDate.map { Date.now.timeIntervalSince($0) } ?? 0
             meeting.duration = output.audioURL == nil ? max(output.duration, elapsed) : output.duration
             meeting.hasAudio = output.audioURL != nil
+            closeMutedRange(at: meeting.duration, in: meeting)
             meeting.status = .ready
             try? context.save()
             lastRecording = FinishedRecording(meetingID: meetingID, date: .now)
@@ -262,6 +272,8 @@ final class AppModel {
         levelsTask = nil
         updatesTask = nil
         recordingStartDate = nil
+        isMicrophoneMuted = false
+        mutedSince = nil
         volatileText = [:]
         levels = AudioLevels()
         services.detector.setRecording(false)
@@ -283,6 +295,44 @@ final class AppModel {
             }
         }
         try? context.save()
+    }
+
+    func toggleMicrophoneMuted() async {
+        await setMicrophoneMuted(!isMicrophoneMuted)
+    }
+
+    func setMicrophoneMuted(_ muted: Bool) async {
+        guard case .recording(let meetingID) = recordingState, let recorder,
+              !unavailableSources.contains(.microphone),
+              muted != isMicrophoneMuted, !isChangingMute
+        else { return }
+        // Two changes in flight could reach the capture queue out of order and leave the audio
+        // disagreeing with this state, so a request during a change is dropped.
+        isChangingMute = true
+        defer { isChangingMute = false }
+
+        let time = await recorder.setMicrophoneMuted(muted)
+        // Stopped meanwhile. `stopRecording` has already closed any open range and reset the state.
+        guard recordingState == .recording(meetingID), let meeting = self.meeting(with: meetingID) else { return }
+        if muted {
+            guard let time else { return }
+            mutedSince = time
+            isMicrophoneMuted = true
+            // Otherwise half-recognized speech stays on screen until the recognizer finalizes
+            // on the silence.
+            volatileText[.me] = nil
+        } else {
+            isMicrophoneMuted = false
+            let elapsed = recordingStartDate.map { Date.now.timeIntervalSince($0) } ?? 0
+            closeMutedRange(at: time ?? elapsed, in: meeting)
+        }
+    }
+
+    /// Written to the meeting right away, so a crash later in the recording keeps the range.
+    private func closeMutedRange(at end: TimeInterval, in meeting: Meeting) {
+        guard let start = mutedSince else { return }
+        mutedSince = nil
+        meeting.mutedRanges.append(MutedRange(start: start, end: max(start, end)))
     }
 
     private func apply(_ update: TranscriptUpdate, to meeting: Meeting) {
@@ -542,7 +592,8 @@ extension AppModel {
         lines: [TranscriptLine] = [],
         volatile: [Speaker: String] = [:],
         levels: AudioLevels = AudioLevels(microphone: 0.55, system: 0.3),
-        unavailable: Set<AudioSource> = []
+        unavailable: Set<AudioSource> = [],
+        microphoneMuted: Bool = false
     ) {
         meeting.status = .recording
         context.insert(meeting)
@@ -552,6 +603,8 @@ extension AppModel {
         volatileText = volatile
         self.levels = levels
         unavailableSources = unavailable
+        isMicrophoneMuted = microphoneMuted
+        mutedSince = microphoneMuted ? elapsed : nil
     }
 
     /// For the transitional states that have no data of their own.

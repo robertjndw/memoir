@@ -29,6 +29,33 @@ struct LibraryLogicTests {
         #expect(TranscriptGrouping.matchingIDs(in: lines, query: " ").isEmpty)
     }
 
+    @Test func mutedRangesRoundTrip() {
+        let meeting = Meeting(title: "Standup")
+        #expect(meeting.mutedRanges.isEmpty)
+        let ranges = [MutedRange(start: 12, end: 40.5), MutedRange(start: 60, end: 75)]
+        meeting.mutedRanges = ranges
+        #expect(meeting.mutedRanges == ranges)
+        meeting.mutedRanges = []
+        #expect(meeting.mutedRangesData == nil)
+    }
+
+    @Test func mutedMarkersSitAtTheStartOfTheirRange() {
+        let lines = [line(.me, 0), line(.me, 10), line(.me, 20), line(.others, 30)]
+        // `early` starts at the same time as a line, so its marker goes first. `late` is after
+        // every line.
+        let early = MutedRange(start: 10, end: 18)
+        let late = MutedRange(start: 35, end: 50)
+        let rows = TranscriptGrouping.rows(lines, mutedRanges: [late, early])
+        #expect(rows.map(\.line?.id) == [lines[0].id, nil, lines[1].id, lines[2].id, lines[3].id, nil])
+        #expect(rows[1].content == .muted(early))
+        #expect(rows[5].content == .muted(late))
+        // The speaker header comes back after a marker even when the speaker did not change.
+        #expect(rows.map(\.startsBlock) == [true, true, true, false, true, true])
+        #expect(Set(rows.map(\.id)).count == rows.count)
+        #expect(TranscriptGrouping.rows(lines, mutedRanges: [early]).map(\.id)
+            == TranscriptGrouping.rows(lines, mutedRanges: [early]).map(\.id))
+    }
+
     @Test func monthGridRespectsFirstWeekday() {
         var cal = calendar
         let november = cal.date(from: DateComponents(year: 2026, month: 11, day: 18))!

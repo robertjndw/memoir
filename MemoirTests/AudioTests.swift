@@ -307,4 +307,43 @@ nonisolated enum AudioFixtures {
         #expect(try AudioFixtures.rms(of: destination, from: 1.1, to: 1.4) < 0.01)
         #expect(try AudioFixtures.rms(of: destination, from: 2.3, to: 2.9) > 0.2)
     }
+
+    @Test func mutedBuffersAreZeroedWithoutBreakingTheTimeline() async throws {
+        let folder = try AudioFixtures.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (stream, continuation) = AsyncStream.makeStream(of: CapturedAudio.self)
+        let start = HostClock.now
+        let pipeline = SourcePipeline(
+            source: .microphone, folder: folder, startHostTime: start,
+            continuation: continuation, levels: nil
+        )
+        func host(_ seconds: Double) -> UInt64 { start + HostClock.ticks(forSeconds: seconds) }
+
+        let mutedWhile = [false, true, true, false]
+        for (index, muted) in mutedWhile.enumerated() {
+            pipeline.isMuted = muted
+            let buffer = AudioFixtures.sine(frequency: 440, sampleRate: 48_000, channels: 1, seconds: 0.5)
+            pipeline.process(buffer, hostTime: host(Double(index) * 0.5))
+        }
+        let segments = pipeline.finish()
+
+        var chunks: [CapturedAudio] = []
+        for await chunk in stream { chunks.append(chunk) }
+        #expect(chunks.count == 4)
+        #expect(zip(chunks.map(\.time), [0, 0.5, 1.0, 1.5]).allSatisfy { abs($0 - $1) < 0.001 })
+        for (chunk, muted) in zip(chunks, mutedWhile) {
+            let isSilent = LevelMath.rms(of: chunk.buffer) == 0
+            #expect(isSilent == muted)
+        }
+
+        #expect(segments.count == 1)
+        #expect(abs(segments[0].offset) < 0.001)
+        #expect(abs(segments[0].duration - 2) < 0.001)
+
+        let destination = folder.appending(path: "audio.m4a")
+        _ = try #require(try AudioMixdown.mix(segments, to: destination))
+        #expect(try AudioFixtures.rms(of: destination, from: 0.1, to: 0.4) > 0.2)
+        #expect(try AudioFixtures.rms(of: destination, from: 0.6, to: 0.9) < 0.01)
+        #expect(try AudioFixtures.rms(of: destination, from: 1.6, to: 1.9) > 0.2)
+    }
 }

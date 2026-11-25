@@ -18,7 +18,8 @@ enum TranscriptLineEmphasis: Equatable {
 /// Every input is a plain value or an object reference, so SwiftUI can skip this view when the
 /// playhead moves elsewhere. Only the rows whose emphasis changes re-render on a line change.
 struct TranscriptLineRow: View {
-    let row: TranscriptRow
+    let line: TranscriptLine
+    let startsBlock: Bool
     let query: String
     /// The match that Find is currently on, which stands out from the other matches.
     var isFocusedMatch = false
@@ -32,11 +33,9 @@ struct TranscriptLineRow: View {
         speaker == .me ? .accentColor : .secondary
     }
 
-    private var line: TranscriptLine { row.line }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if row.startsBlock {
+            if startsBlock {
                 header
             }
             content
@@ -163,6 +162,27 @@ struct TranscriptLineRow: View {
             searchRange = found.upperBound..<text.endIndex
         }
         return result
+    }
+}
+
+/// Marks a stretch where the user was muted. Lines from the others keep going around it.
+struct MutedMarkerRow: View {
+    let range: MutedRange
+
+    var body: some View {
+        let start = LibraryFormat.timecode(range.start)
+        let end = LibraryFormat.timecode(range.end)
+        HStack(spacing: 6) {
+            Image(systemName: "mic.slash.fill")
+                .accessibilityHidden(true)
+            Text("You were muted \(start)-\(end)")
+                .monospacedDigit()
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("You were muted from \(start) to \(end)")
     }
 }
 

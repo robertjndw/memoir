@@ -59,6 +59,10 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
     private var silence: AVAudioPCMBuffer?
     private var isFinished = false
 
+    /// Zeroed rather than dropped, so the part file and the transcriber keep a continuous
+    /// timeline.
+    var isMuted = false
+
     init(
         source: AudioSource,
         folder: URL,
@@ -76,6 +80,7 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
     func process(_ buffer: AVAudioPCMBuffer, hostTime: UInt64) {
         guard !isFinished, buffer.frameLength > 0 else { return }
         let time = HostClock.recordingTime(of: hostTime, start: startHostTime)
+        if isMuted { Self.zero(buffer) }
         write(buffer, at: time)
         levels?.report(source, rms: LevelMath.rms(of: buffer))
         continuation.yield(CapturedAudio(buffer: buffer, time: time))
@@ -173,9 +178,7 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
         let chunk = AVAudioFrameCount(format.sampleRate)
         if silence == nil, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunk) {
             buffer.frameLength = chunk
-            for audioBuffer in UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList) {
-                if let data = audioBuffer.mData { memset(data, 0, Int(audioBuffer.mDataByteSize)) }
-            }
+            Self.zero(buffer)
             silence = buffer
         }
         guard let silence else { return }
@@ -191,6 +194,12 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
             }
             current?.frames += AVAudioFramePosition(count)
             remaining -= AVAudioFramePosition(count)
+        }
+    }
+
+    private static func zero(_ buffer: AVAudioPCMBuffer) {
+        for audioBuffer in UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList) {
+            if let data = audioBuffer.mData { memset(data, 0, Int(audioBuffer.mDataByteSize)) }
         }
     }
 
