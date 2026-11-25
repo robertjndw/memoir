@@ -28,7 +28,7 @@ nonisolated struct GeneratedActionItem {
     @Guide(description: "The task, starting with a verb")
     var task: String
 
-    @Guide(description: "Who will do it. 'You' only when a 'You:' line says they will do it. A person's name when the transcript or attendee list makes it clear. Omit when unclear.")
+    @Guide(description: "Who will do it. 'You' only when a 'You:' line says they will do it. A person's name or speaker label such as 'Speaker 2' when the transcript makes it clear. Omit when unclear.")
     var owner: String?
 }
 
@@ -84,6 +84,8 @@ nonisolated extension MeetingSummary {
                 "no action items were assigned", "nothing", "-"].contains(normalized)
     }
 
+    /// A numbered label like "Speaker 2" is kept: it points at one specific person in this
+    /// meeting, which is more useful than no owner. Only the unnumbered, generic words go.
     private static func cleanOwner(_ owner: String?) -> String? {
         guard let owner else { return nil }
         let cleaned = clean(owner)

@@ -35,6 +35,17 @@ struct LibraryExporterTests {
         #expect(!text.contains("\u{2014}"))
     }
 
+    @Test func identifiedAndNamedSpeakersAreExported() {
+        let lines = [
+            TranscriptLine(speaker: .others, start: 1, end: 2, text: "Hi", voice: 2),
+            TranscriptLine(speaker: .others, start: 3, end: 4, text: "Hello", voice: 1, name: "Dana"),
+        ]
+        let text = export(summary: nil, lines: lines)
+        #expect(text.contains("[00:01] **Speaker 2:** Hi"))
+        #expect(text.contains("[00:03] **Dana:** Hello"))
+        #expect(!text.contains("**Others:**"))
+    }
+
     @Test func withoutSummary() {
         let text = export(summary: nil, lines: [TranscriptLine(speaker: .unknown, start: 0, end: 1, text: "Hi")])
         #expect(!text.contains("## Summary"))

@@ -13,6 +13,8 @@ final class AppSettings {
         static let localeIdentifier = "localeIdentifier"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let mcpEnabled = "mcpEnabled"
+        static let identifySpeakers = "identifySpeakers"
+        static let enhancedTranscription = "enhancedTranscription"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -48,6 +50,16 @@ final class AppSettings {
         didSet { defaults.set(mcpEnabled, forKey: Key.mcpEnabled); mcpEnabledChanged?() }
     }
 
+    /// Split the other side of a call into individual speakers after a recording. Only takes
+    /// effect while the model for it is installed.
+    var identifySpeakers: Bool {
+        didSet { defaults.set(identifySpeakers, forKey: Key.identifySpeakers) }
+    }
+    /// Transcribe again with the optional model after a recording. Same condition.
+    var enhancedTranscription: Bool {
+        didSet { defaults.set(enhancedTranscription, forKey: Key.enhancedTranscription) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         defaults.register(defaults: [
@@ -66,6 +78,8 @@ final class AppSettings {
         localeIdentifier = defaults.string(forKey: Key.localeIdentifier) ?? ""
         hasCompletedOnboarding = defaults.bool(forKey: Key.hasCompletedOnboarding)
         mcpEnabled = defaults.bool(forKey: Key.mcpEnabled)
+        identifySpeakers = defaults.bool(forKey: Key.identifySpeakers)
+        enhancedTranscription = defaults.bool(forKey: Key.enhancedTranscription)
     }
 
     var transcriptionLocale: Locale {

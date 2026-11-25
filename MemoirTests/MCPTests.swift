@@ -306,6 +306,30 @@ private extension JSONValue {
         #expect(result.text.contains("- [ ] Send the budget (owner: Anna)"))
         #expect(result.text.contains("- [x] Book the room"))
     }
+
+    @MainActor @Test func storeCorpusTranscriptUsesSpeakerLabels() async throws {
+        let container = ModelContainer.memoir(inMemory: true)
+        let meeting = Meeting(title: "Panel", hasCustomTitle: true)
+        meeting.status = .ready
+        meeting.segments = [
+            TranscriptSegment(line: TranscriptLine(speaker: .me, start: 0, end: 1, text: "Welcome")),
+            TranscriptSegment(line: TranscriptLine(speaker: .others, start: 2, end: 3, text: "Thanks", voice: 1)),
+            TranscriptSegment(line: TranscriptLine(speaker: .others, start: 4, end: 5, text: "Glad to be here", voice: 2)),
+        ]
+        meeting.speakerNames = [2: "Dana"]
+        container.mainContext.insert(meeting)
+
+        let tools = MCPTools(library: StoreCorpus(container: container))
+        let result = await tools.getMeeting(id: meeting.id.uuidString, includeTranscript: true, query: nil)
+        #expect(result.text.contains("[00:00] You: Welcome"))
+        #expect(result.text.contains("[00:02] Speaker 1: Thanks"))
+        #expect(result.text.contains("[00:04] Dana: Glad to be here"))
+    }
+
+    @Test func instructionsDescribeIndividualSpeakers() {
+        #expect(MCPSession.instructions.contains("Speaker 2"))
+        #expect(!MCPSession.instructions.contains("\u{2014}"))
+    }
 }
 
 private nonisolated final class CountingLibrary: MeetingLibrary, @unchecked Sendable {

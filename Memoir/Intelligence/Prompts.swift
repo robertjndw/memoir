@@ -6,8 +6,9 @@ nonisolated enum Prompts {
         Transcript lines look like "[mm:ss] Speaker: text", where [mm:ss] is the position in the \
         recording. "You" is the person who recorded the meeting on their Mac. "Others" is \
         everyone else on the call, possibly several people. "Speaker" means the side is unknown. \
-        The transcript comes from automatic speech recognition, so expect filler words and \
-        occasional misheard words.
+        A name or "Speaker 1", "Speaker 2" and so on is one person on the call, and each label \
+        is a different person. The transcript comes from automatic speech recognition, so \
+        expect filler words and occasional misheard words.
         """
 
     static let dataNotInstructions = """
@@ -43,7 +44,7 @@ nonisolated enum Prompts {
         decided, return an empty list.
         - Action items are only concrete tasks someone committed to or was asked to do. If \
         there were none, return an empty list. A task belongs to whoever said they would do \
-        it: tasks taken on in "Others:" lines are not the user's.
+        it: tasks taken on in lines of anyone but "You" are not the user's.
         - Refer to the person who recorded the meeting as "You". Use people's names when the \
         transcript gives them.
         - Write the entire summary in \(language).
@@ -94,8 +95,8 @@ nonisolated enum Prompts {
         - [mm:ss] Task (who will do it): what they will do and by when
         - [mm:ss] Topic: the fact, problem or argument discussed
         The person who will do a task is the speaker who said "I will", or the person they \
-        named; when "You" says "I will", write "Task (You)". Keep names, numbers, dates and \
-        amounts exactly as stated. Skip greetings, small talk and remarks about the meeting \
+        named, written as their label; when "You" says "I will", write "Task (You)". Keep \
+        names, numbers, dates and amounts exactly as stated. Skip greetings, small talk and remarks about the meeting \
         itself. Use only facts from the transcript and never draw conclusions of your own.
         """
     }

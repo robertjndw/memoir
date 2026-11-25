@@ -32,6 +32,34 @@ nonisolated struct TranscriptLine: Sendable, Identifiable, Hashable {
     var start: TimeInterval
     var end: TimeInterval
     var text: String
+    /// Which person this is, numbered from 1 in the order they first speak. Nil for the user's
+    /// own lines and for transcripts whose speakers were never identified.
+    var voice: Int?
+    /// The name the user gave this voice. Not stored per line: the store fills it in on read.
+    var name: String?
+
+    /// What to call the speaker of this line anywhere it is shown or handed to a model.
+    var label: String {
+        if let name, !name.isEmpty { return name }
+        if let voice { return "Speaker \(voice)" }
+        return speaker.label
+    }
+
+    var speakerID: SpeakerID { SpeakerID(speaker: speaker, voice: voice) }
+}
+
+/// One person in a transcript. Two lines belong to the same turn only if this matches, which
+/// `speaker` alone no longer says once the other side was split into individual voices.
+nonisolated struct SpeakerID: Sendable, Hashable {
+    var speaker: Speaker
+    var voice: Int?
+}
+
+/// A word and where it was spoken, in seconds from the start of the recording.
+nonisolated struct TimedWord: Sendable, Hashable {
+    var text: String
+    var start: TimeInterval
+    var end: TimeInterval
 }
 
 // MARK: - Audio capture
@@ -117,6 +145,9 @@ nonisolated struct RecordingOutput: Sendable {
     /// The single mixed-down file, or nil if nothing could be written.
     let audioURL: URL?
     let duration: TimeInterval
+    /// Each source on its own as 16 kHz mono, for the models that run after the recording.
+    /// Only written when the recorder was asked to keep them. The caller deletes them.
+    var tracks: [AudioSource: URL] = [:]
 }
 
 nonisolated enum RecordingError: LocalizedError {
@@ -160,6 +191,9 @@ nonisolated struct TranscriptUpdate: Sendable {
     /// A volatile update replaces the previous volatile text of the same speaker. A final update
     /// is appended to the transcript and clears that speaker's volatile text.
     let isFinal: Bool
+    /// The words of a final update with their timing, when the engine reports it. Needed to
+    /// split a line that turns out to span two people.
+    var words: [TimedWord]? = nil
 }
 
 nonisolated enum TranscriptEvent: Sendable {
@@ -198,6 +232,68 @@ nonisolated protocol SpeechModelManaging: Sendable {
     func status(for locale: Locale) async -> SpeechModelStatus
     /// Yields download progress 0...1 and finishes once the model is installed.
     func install(locale: Locale) -> AsyncThrowingStream<Double, Error>
+}
+
+// MARK: - Optional models
+
+/// Models Memoir does not need to work, which the user can download to get more out of a
+/// recording. They are third-party and run on this Mac like everything else.
+nonisolated enum OptionalModel: String, Sendable, CaseIterable, Identifiable {
+    /// Tells the people on the other side of a call apart (speaker diarization).
+    case speakerIdentification
+    /// A second, more accurate transcription pass after the recording.
+    case enhancedTranscription
+
+    var id: String { rawValue }
+}
+
+nonisolated protocol OptionalModelManaging: Sendable {
+    func isInstalled(_ model: OptionalModel) async -> Bool
+    /// Bytes on disk, nil when not installed.
+    func installedSize(of model: OptionalModel) async -> Int64?
+    /// Yields download progress 0...1 and finishes once the model is ready to use. The only
+    /// time any of this touches the network.
+    func install(_ model: OptionalModel) -> AsyncThrowingStream<Double, Error>
+    func remove(_ model: OptionalModel) async throws
+}
+
+nonisolated struct EnhancementRequest: Sendable {
+    nonisolated enum Audio: Sendable {
+        /// Fresh from the recorder: each source on its own, so the microphone is known to be
+        /// the user and only the system track needs its speakers told apart.
+        case tracks([AudioSource: URL])
+        /// An older recording where only the mix is left.
+        case mixed(URL)
+    }
+
+    var audio: Audio
+    var locale: Locale
+    /// The transcript as it stands. Kept as the text when `transcribe` is false, and used to
+    /// find the user's own voice in a mixed file.
+    var lines: [TranscriptLine]
+    /// Word timings of `lines` by line id, for the lines that have them.
+    var words: [UUID: [TimedWord]] = [:]
+    /// Replace the text with a new transcription.
+    var transcribe: Bool
+    /// Split the other side into individual voices.
+    var identifySpeakers: Bool
+}
+
+nonisolated enum EnhancementProgress: Sendable {
+    /// 0...1 within the step.
+    case transcribing(Double)
+    case identifyingSpeakers(Double)
+    /// The complete new transcript, in time order. Always the last element.
+    case finished([TranscriptLine])
+}
+
+/// The work done on a recording after it ended, with the optional models.
+nonisolated protocol TranscriptEnhancing: Sendable {
+    /// Whether the transcription model knows this language. Speaker identification does not
+    /// depend on language.
+    func supportsTranscription(in locale: Locale) -> Bool
+    /// The models the request needs must be installed. Never downloads anything.
+    func enhance(_ request: EnhancementRequest) -> AsyncThrowingStream<EnhancementProgress, Error>
 }
 
 // MARK: - Intelligence

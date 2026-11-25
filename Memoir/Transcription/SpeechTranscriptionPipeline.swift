@@ -365,7 +365,10 @@ nonisolated struct ResultMapper {
     func update(for result: SpeechTranscriber.Result) -> TranscriptUpdate {
         let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
         if result.isFinal {
-            return update(text, Self.audioRange(of: result.text) ?? result.range, isFinal: true)
+            var final = update(text, Self.audioRange(of: result.text) ?? result.range, isFinal: true)
+            let words = Self.words(of: result.text)
+            final.words = words.isEmpty ? nil : words
+            return final
         }
         return update(text, result.range, isFinal: false)
     }
@@ -388,6 +391,17 @@ nonisolated struct ResultMapper {
         }
         guard let start, let end else { return nil }
         return CMTimeRange(start: start, end: end)
+    }
+
+    /// The runs that carry a time range, which is how the analyzer marks words.
+    static func words(of text: AttributedString) -> [TimedWord] {
+        text.runs.compactMap { run in
+            guard let range = run.audioTimeRange, range.isValid, !range.isEmpty else { return nil }
+            let word = String(text[run.range].characters).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !word.isEmpty else { return nil }
+            let start = seconds(range.start)
+            return TimedWord(text: word, start: start, end: max(start, seconds(range.end)))
+        }
     }
 
     static func seconds(_ time: CMTime) -> TimeInterval {
