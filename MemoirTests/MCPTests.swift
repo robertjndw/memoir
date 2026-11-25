@@ -359,6 +359,15 @@ private nonisolated final class MutableLibrary: MeetingLibrary, @unchecked Senda
     }
 }
 
+/// Runs blocking socket reads and semaphore waits on a thread of their own. On the cooperative
+/// pool they hold threads the MCP server needs to answer, and on a CI machine with few cores
+/// that starves it until the client times out.
+private nonisolated func offPool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        Thread { continuation.resume(with: Result(catching: body)) }.start()
+    }
+}
+
 /// A connection on one end of a socket pair, the test holding the other end.
 @Suite(.serialized) struct MCPConnectionLimitTests {
     private final class Closed: @unchecked Sendable {
@@ -374,7 +383,7 @@ private nonisolated final class MutableLibrary: MeetingLibrary, @unchecked Senda
     }
 
     /// True once the peer sees end of file.
-    private func seesEOF(_ fd: Int32) -> Bool {
+    private nonisolated static func seesEOF(_ fd: Int32) -> Bool {
         var chunk = [UInt8](repeating: 0, count: 65_536)
         while true {
             let n = read(fd, &chunk, chunk.count)
@@ -383,7 +392,7 @@ private nonisolated final class MutableLibrary: MeetingLibrary, @unchecked Senda
         }
     }
 
-    @Test func floodOfRequestsClosesTheConnection() {
+    @Test func floodOfRequestsClosesTheConnection() async throws {
         let (server, peer) = pair()
         defer { close(peer) }
         let closed = Closed()
@@ -392,12 +401,12 @@ private nonisolated final class MutableLibrary: MeetingLibrary, @unchecked Senda
         connection.start()
         let flood = Array((String(repeating: #"{"jsonrpc":"2.0","id":1,"method":"ping"}"# + "\n", count: 50)).utf8)
         #expect(write(peer, flood, flood.count) == flood.count)
-        #expect(closed.signal.wait(timeout: .now() + 5) == .success)
-        #expect(seesEOF(peer))
+        #expect(try await offPool { closed.signal.wait(timeout: .now() + 5) } == .success)
+        #expect(try await offPool { Self.seesEOF(peer) })
         withExtendedLifetime(connection) {}
     }
 
-    @Test func clientThatNeverReadsClosesTheConnection() {
+    @Test func clientThatNeverReadsClosesTheConnection() async throws {
         let (server, peer) = pair()
         defer { close(peer) }
         let closed = Closed()
@@ -405,21 +414,24 @@ private nonisolated final class MutableLibrary: MeetingLibrary, @unchecked Senda
         connection.start()
         let response = String(repeating: "x", count: 600_000)
         for _ in 0..<4 { connection.send(response) }
-        #expect(closed.signal.wait(timeout: .now() + 5) == .success)
-        #expect(seesEOF(peer))
+        #expect(try await offPool { closed.signal.wait(timeout: .now() + 5) } == .success)
+        #expect(try await offPool { Self.seesEOF(peer) })
     }
 
-    @Test func wellBehavedConnectionStaysOpen() {
+    @Test func wellBehavedConnectionStaysOpen() async throws {
         let (server, peer) = pair()
         defer { close(peer) }
         let closed = Closed()
         let connection = MCPConnection(fd: server) { _ in closed.signal.signal() }
         connection.start()
         connection.send("hello")
-        var chunk = [UInt8](repeating: 0, count: 16)
-        let n = read(peer, &chunk, chunk.count)
-        #expect(String(decoding: chunk[..<max(n, 0)], as: UTF8.self) == "hello\n")
-        #expect(closed.signal.wait(timeout: .now() + 0.3) == .timedOut)
+        let received = try await offPool {
+            var chunk = [UInt8](repeating: 0, count: 16)
+            let n = read(peer, &chunk, chunk.count)
+            return String(decoding: chunk[..<max(n, 0)], as: UTF8.self)
+        }
+        #expect(received == "hello\n")
+        #expect(try await offPool { closed.signal.wait(timeout: .now() + 0.3) } == .timedOut)
         connection.close(force: true)
     }
 }
@@ -497,8 +509,9 @@ private nonisolated final class MutableLibrary: MeetingLibrary, @unchecked Senda
     }
 }
 
-/// Blocking client for the socket tests. Its reads run off the main actor (the test target's
-/// default), which the server needs to make progress. Used by one test at a time.
+/// Blocking client for the socket tests. Its reads run on their own thread, off both the main
+/// actor and the cooperative pool, which the server needs to make progress. Used by one test
+/// at a time.
 private nonisolated final class SocketClient: @unchecked Sendable {
     private let fd: Int32
     private var buffer = LineBuffer()
@@ -524,26 +537,30 @@ private nonisolated final class SocketClient: @unchecked Sendable {
         guard Darwin.write(fd, bytes, bytes.count) == bytes.count else { throw POSIXError(.EIO) }
     }
 
-    @concurrent func readLines(_ count: Int) async throws -> [String] {
-        var lines: [String] = []
-        var chunk = [UInt8](repeating: 0, count: 65_536)
-        while lines.count < count {
-            let read = Darwin.read(fd, &chunk, chunk.count)
-            guard read > 0 else { throw POSIXError(.ETIMEDOUT) }
-            lines += buffer.append(chunk[..<read])
+    func readLines(_ count: Int) async throws -> [String] {
+        try await offPool { [self] in
+            var lines: [String] = []
+            var chunk = [UInt8](repeating: 0, count: 65_536)
+            while lines.count < count {
+                let read = Darwin.read(fd, &chunk, chunk.count)
+                guard read > 0 else { throw POSIXError(.ETIMEDOUT) }
+                lines += buffer.append(chunk[..<read])
+            }
+            return lines
         }
-        return lines
     }
 
     /// What arrives until the server closes the connection.
-    @concurrent func readToEnd() async throws -> String {
-        var chunk = [UInt8](repeating: 0, count: 4096)
-        var data: [UInt8] = []
-        while true {
-            let read = Darwin.read(fd, &chunk, chunk.count)
-            if read == 0 { return String(decoding: data, as: UTF8.self) }
-            guard read > 0 else { throw POSIXError(.ETIMEDOUT) }
-            data += chunk[..<read]
+    func readToEnd() async throws -> String {
+        try await offPool { [self] in
+            var chunk = [UInt8](repeating: 0, count: 4096)
+            var data: [UInt8] = []
+            while true {
+                let read = Darwin.read(fd, &chunk, chunk.count)
+                if read == 0 { return String(decoding: data, as: UTF8.self) }
+                guard read > 0 else { throw POSIXError(.ETIMEDOUT) }
+                data += chunk[..<read]
+            }
         }
     }
 
