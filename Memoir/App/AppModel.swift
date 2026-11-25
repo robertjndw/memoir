@@ -116,6 +116,9 @@ final class AppModel {
     @ObservationIgnored private var transcriberStartTask: Task<Void, Never>?
     /// The stop in flight, so `finishRecording` can wait for it instead of polling.
     @ObservationIgnored private var stopTask: Task<Void, Never>?
+    /// The optional models the current recording was started for. Only used for the progress
+    /// label until the plan is checked again after the stop.
+    @ObservationIgnored private var recordingPlan = EnhancementPlan()
     /// Recording time the current mute began. Only closed ranges are stored on the meeting.
     @ObservationIgnored private var mutedSince: TimeInterval?
     @ObservationIgnored private var isChangingMute = false
@@ -279,6 +282,7 @@ final class AppModel {
         // Decided now because the recorder has to know at stop whether to keep each source
         // on its own. A model installed during the meeting applies from the next one.
         let plan = await enhancementPlan(for: locale)
+        recordingPlan = plan
         let recorder = services.makeRecorder(folder, !plan.isEmpty)
         let streams: CaptureStreams
         do {
@@ -392,16 +396,25 @@ final class AppModel {
             try? context.save()
             lastRecording = FinishedRecording(meetingID: meetingID, date: .now)
             contentChanged(in: meetingID)
-            let tracks = output.tracks
             let words = liveWords
+            let holdsTracks = output.holdsTracks
+            if holdsTracks {
+                // Claimed before anything is awaited, so Transcribe Again or Identify Speakers
+                // can't start alongside this run, and the launch cleanup leaves its files alone.
+                enhancing[meetingID] = EnhancementActivity(
+                    step: recordingPlan.transcribe ? .transcribing : .identifyingSpeakers)
+            }
             // Not awaited: the recorder is free for the next meeting while the models work.
             // The summary waits for them so it is written from the final transcript.
             Task {
-                if !tracks.isEmpty {
-                    let locale = Locale(identifier: meeting.localeIdentifier)
+                if holdsTracks {
+                    let plan = await enhancementPlan(for: Locale(identifier: meeting.localeIdentifier))
+                    let render = !plan.isEmpty && isStored(meeting)
+                    let tracks = await recorder.takeTracks(render: render)
+                    // Without any track there's nothing to work from, but the call still drops the claim.
                     await runEnhancement(
-                        on: meeting, audio: .tracks(tracks), plan: await enhancementPlan(for: locale), words: words
-                    )
+                        on: meeting, audio: .tracks(tracks), plan: tracks.isEmpty ? EnhancementPlan() : plan,
+                        words: words, claimed: true)
                     for url in tracks.values {
                         try? FileManager.default.removeItem(at: url)
                     }
@@ -410,10 +423,8 @@ final class AppModel {
                     await summarize(meeting)
                 }
             }
-        } else {
-            for url in output.tracks.values {
-                try? FileManager.default.removeItem(at: url)
-            }
+        } else if output.holdsTracks {
+            Task { _ = await recorder.takeTracks(render: false) }
         }
         // Set last so it is not replaced by a transcription error reported during the drain.
         if mixdownFailed {
@@ -617,24 +628,36 @@ final class AppModel {
         guard let url = meeting.audioURL, !retranscribing.contains(id), enhancing[id] == nil,
               activeMeetingID != id
         else { return }
+        // Marked before the plan is awaited, so a second click can't start another run.
+        retranscribing.insert(id)
+        defer { retranscribing.remove(id) }
         let plan = await enhancementPlan(for: Locale(identifier: meeting.localeIdentifier))
+        transcriptionErrors[id] = nil
         if plan.transcribe {
-            // The optional model does both steps in one go.
+            // The optional model does both steps in one go. There's no await between here and
+            // runEnhancement claiming the meeting, so nothing can start in between.
+            retranscribing.remove(id)
             await runEnhancement(on: meeting, audio: .mixed(url), plan: plan)
+            // runEnhancement keeps the old transcript when the model heard nothing, which for a
+            // meeting without one would otherwise leave the button doing nothing visible.
+            if isStored(meeting), meeting.segments.isEmpty, enhancementErrors[id] == nil {
+                transcriptionErrors[id] = String(localized: "No speech was found in this recording.")
+            }
             return
         }
-        retranscribing.insert(id)
-        transcriptionErrors[id] = nil
-        defer { retranscribing.remove(id) }
 
         var lines: [TranscriptLine] = []
+        // Lets speaker identification split a line that spans two people.
+        var words: [UUID: [TimedWord]] = [:]
         do {
             let locale = Locale(identifier: meeting.localeIdentifier)
             for try await update in services.makeTranscriber().transcribe(file: url, locale: locale)
             where update.isFinal {
                 let text = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { continue }
-                lines.append(TranscriptLine(speaker: update.speaker, start: update.start, end: update.end, text: text))
+                let line = TranscriptLine(speaker: update.speaker, start: update.start, end: update.end, text: text)
+                lines.append(line)
+                if let lineWords = update.words { words[line.id] = lineWords }
             }
         } catch {
             if isStored(meeting) { transcriptionErrors[id] = error.localizedDescription }
@@ -651,7 +674,7 @@ final class AppModel {
             // Released by hand rather than by the defer above, which would only run after
             // the speakers were identified and keep the "transcribing" state up meanwhile.
             retranscribing.remove(id)
-            await runEnhancement(on: meeting, audio: .mixed(url), plan: plan)
+            await runEnhancement(on: meeting, audio: .mixed(url), plan: plan, words: words)
         }
     }
 
@@ -696,13 +719,16 @@ final class AppModel {
         on meeting: Meeting,
         audio: EnhancementRequest.Audio,
         plan: EnhancementPlan,
-        words: [UUID: [TimedWord]] = [:]
+        words: [UUID: [TimedWord]] = [:],
+        claimed: Bool = false
     ) async {
         let id = meeting.id
-        guard !plan.isEmpty, enhancing[id] == nil, isStored(meeting) else { return }
+        guard claimed || (enhancing[id] == nil && !retranscribing.contains(id)) else { return }
+        // Also on the early returns, so a claim made by the caller never sticks.
+        defer { enhancing[id] = nil }
+        guard !plan.isEmpty, isStored(meeting) else { return }
         enhancing[id] = EnhancementActivity(step: plan.transcribe ? .transcribing : .identifyingSpeakers)
         enhancementErrors[id] = nil
-        defer { enhancing[id] = nil }
 
         let request = EnhancementRequest(
             audio: audio,

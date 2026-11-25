@@ -26,9 +26,11 @@ struct TranscriptView: View {
                 if !isLive {
                     EnhancementStatusBar(meeting: meeting)
                 }
-                // Replacing the transcript gives every line a new ID, so the first one changing
-                // is when the improved transcript has arrived. A live transcript only grows.
-                let replacementKey = isLive ? nil : lines.first?.id
+                // A new transcription gives every line a new ID, so the first one changing is
+                // when it has arrived. Keyed the same while live, because the saved lines keep
+                // the live IDs: a different key there would rebuild the transcript, and lose
+                // its scroll position, the moment a recording stops.
+                let replacementKey = lines.first?.id
                 ZStack {
                     transcript(lines: lines, matches: matches)
                         .id(replacementKey)
@@ -87,6 +89,7 @@ struct TranscriptView: View {
                 .animation(.smooth(duration: 0.3), value: model.retranscribing.contains(meeting.id))
                 .animation(.smooth(duration: 0.3), value: model.enhancing[meeting.id]?.step)
                 .animation(.smooth(duration: 0.3), value: model.transcriptionErrors[meeting.id])
+                .animation(.smooth(duration: 0.3), value: model.enhancementErrors[meeting.id])
             }
         } else {
             ContentUnavailableView("No Transcript", systemImage: "quote.bubble", description: Text("Nothing was transcribed for this meeting."))

@@ -8,6 +8,7 @@ nonisolated enum OptionalModelError: LocalizedError {
     case alreadyInstalling(OptionalModel)
     case incompleteDownload(OptionalModel)
     case inUse(OptionalModel)
+    case running(OptionalModel)
     case notInstalled(OptionalModel)
 
     var errorDescription: String? {
@@ -18,6 +19,8 @@ nonisolated enum OptionalModelError: LocalizedError {
             "The \(model.displayName) did not download completely. Try again."
         case .inUse(let model):
             "The \(model.displayName) is being downloaded and cannot be removed right now."
+        case .running(let model):
+            "The \(model.displayName) is working on a recording and cannot be removed right now."
         case .notInstalled(let model):
             "The \(model.displayName) is not installed. Download it in Settings first."
         }
@@ -52,23 +55,40 @@ nonisolated struct FluidModelStore: OptionalModelManaging {
         return FluidModels.size(of: FluidModels.folder(for: model, in: directory))
     }
 
+    /// The last install of each model. Cancelling one only asks FluidAudio's download to stop,
+    /// and until it does the model stays locked, so the next install or removal waits for it
+    /// rather than failing.
+    private static let installs = Mutex<[OptionalModel: Task<Void, Never>]>([:])
+
     func install(_ model: OptionalModel) -> AsyncThrowingStream<Double, Error> {
         let directory = directory
         return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    try await FluidModels.install(model, in: directory) { continuation.yield($0) }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
+            let task = Self.installs.withLock { installs in
+                let previous = installs[model]
+                let task = Task {
+                    await previous?.value
+                    do {
+                        try Task.checkCancellation()
+                        try await FluidModels.install(model, in: directory) { continuation.yield($0) }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
                 }
+                installs[model] = task
+                return task
             }
             continuation.onTermination = { _ in task.cancel() }
         }
     }
 
     func remove(_ model: OptionalModel) async throws {
-        try FluidModels.whileNotInstalling(model) {
+        // Only a cancelled install is waited for. One still running fails the removal, since
+        // waiting would mean sitting out the whole download.
+        if let install = Self.installs.withLock({ $0[model] }), install.isCancelled {
+            await install.value
+        }
+        try FluidModels.whileIdle(model) {
             let folder = FluidModels.folder(for: model, in: directory)
             guard FileManager.default.fileExists(atPath: folder.path) else { return }
             try FileManager.default.removeItem(at: folder)
@@ -163,7 +183,14 @@ nonisolated enum FluidModels {
 
     // MARK: - Install
 
-    private static let installing = Mutex<Set<OptionalModel>>([])
+    /// What each model is busy with. One lock for both, so a removal can't slip in between an
+    /// enhancement checking that a model is installed and starting to use it.
+    private struct Activity {
+        var installing: Set<OptionalModel> = []
+        var running: [OptionalModel: Int] = [:]
+    }
+
+    private static let activity = Mutex(Activity())
 
     /// Share of the progress bar for the download. The rest is the first load, which compiles
     /// the models for this Mac's Neural Engine and takes a noticeable while for the encoder.
@@ -174,10 +201,10 @@ nonisolated enum FluidModels {
         in directory: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        guard installing.withLock({ $0.insert(model).inserted }) else {
+        guard activity.withLock({ $0.installing.insert(model).inserted }) else {
             throw OptionalModelError.alreadyInstalling(model)
         }
-        defer { _ = installing.withLock { $0.remove(model) } }
+        defer { _ = activity.withLock { $0.installing.remove(model) } }
 
         if isInstalled(model, in: directory) {
             progress(1)
@@ -234,11 +261,34 @@ nonisolated enum FluidModels {
         progress(1)
     }
 
-    static func whileNotInstalling<T>(_ model: OptionalModel, _ body: () throws -> T) throws -> T {
-        try installing.withLock { installing in
-            guard !installing.contains(model) else { throw OptionalModelError.inUse(model) }
+    /// Runs `body` while nothing downloads or uses `model`, holding that state until it returns.
+    static func whileIdle<T>(_ model: OptionalModel, _ body: () throws -> T) throws -> T {
+        try activity.withLock { activity in
+            guard !activity.installing.contains(model) else { throw OptionalModelError.inUse(model) }
+            guard activity.running[model, default: 0] == 0 else { throw OptionalModelError.running(model) }
             return try body()
         }
+    }
+
+    /// Keeps `models` from being removed while `body` runs. Throws `modelMissing` for the first
+    /// one that is not installed.
+    static func whileRunning<T>(
+        _ models: [OptionalModel],
+        in directory: URL,
+        _ body: () async throws -> T
+    ) async throws -> T {
+        try activity.withLock { activity in
+            if let missing = models.first(where: { !isInstalled($0, in: directory) }) {
+                throw EnhancementError.modelMissing(missing)
+            }
+            for model in models { activity.running[model, default: 0] += 1 }
+        }
+        defer {
+            activity.withLock { activity in
+                for model in models { activity.running[model, default: 1] -= 1 }
+            }
+        }
+        return try await body()
     }
 
     // MARK: - Loading

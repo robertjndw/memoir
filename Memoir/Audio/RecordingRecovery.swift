@@ -37,14 +37,23 @@ nonisolated enum RecordingRecovery {
     }
 
     /// Cleans every meeting folder under the recordings directory except `skipping`, which must
-    /// hold the meetings being recorded or processed right now: their tracks are in use. This is
-    /// the entry point for finished meetings, which `recover` never visits.
+    /// hold the meetings being recorded or processed right now: their tracks and parts are in
+    /// use. This is the entry point for finished meetings, which `recover` never visits.
+    ///
+    /// Besides tracks, it removes parts sitting next to a complete `audio.m4a`. The recorder
+    /// keeps them past the mixdown when tracks are wanted, and an app that ends before they are
+    /// rendered leaves them behind in a meeting that already has its audio.
     static func removeStaleTracks(skipping: Set<UUID>, recordings: URL? = nil) {
         let root = recordings ?? RecordingFiles.baseDirectory.appending(path: "Recordings", directoryHint: .isDirectory)
         let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         for folder in folders {
             if let id = UUID(uuidString: folder.lastPathComponent), skipping.contains(id) { continue }
             removeStaleTracks(in: folder)
+            if duration(of: folder.appending(path: AudioRecorder.audioFileName)) != nil {
+                for url in partURLs(in: folder) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
         }
     }
 

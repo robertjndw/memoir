@@ -29,15 +29,18 @@ private nonisolated final class TrackRecorder: AudioRecording {
     func setMicrophoneMuted(_ muted: Bool) async -> TimeInterval? { nil }
 
     func stop() async -> RecordingOutput {
+        RecordingOutput(audioURL: folder.appending(path: "audio.m4a"), duration: 3, holdsTracks: keepTracks)
+    }
+
+    func takeTracks(render: Bool) async -> [AudioSource: URL] {
+        guard keepTracks, render else { return [:] }
         var tracks: [AudioSource: URL] = [:]
-        if keepTracks {
-            for source in [AudioSource.microphone, .system] {
-                let url = folder.appending(path: "track-\(source.rawValue).caf")
-                FileManager.default.createFile(atPath: url.path, contents: Data([0]))
-                tracks[source] = url
-            }
+        for source in [AudioSource.microphone, .system] {
+            let url = folder.appending(path: "track-\(source.rawValue).caf")
+            FileManager.default.createFile(atPath: url.path, contents: Data([0]))
+            tracks[source] = url
         }
-        return RecordingOutput(audioURL: folder.appending(path: "audio.m4a"), duration: 3, tracks: tracks)
+        return tracks
     }
 }
 

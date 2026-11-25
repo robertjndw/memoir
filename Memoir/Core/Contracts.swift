@@ -145,9 +145,9 @@ nonisolated struct RecordingOutput: Sendable {
     /// The single mixed-down file, or nil if nothing could be written.
     let audioURL: URL?
     let duration: TimeInterval
-    /// Each source on its own as 16 kHz mono, for the models that run after the recording.
-    /// Only written when the recorder was asked to keep them. The caller deletes them.
-    var tracks: [AudioSource: URL] = [:]
+    /// The recorder kept its part files so `takeTracks` can render each source on its own.
+    /// Set only when it was asked to keep tracks and the mix succeeded.
+    var holdsTracks = false
 }
 
 nonisolated enum RecordingError: LocalizedError {
@@ -179,6 +179,14 @@ nonisolated protocol AudioRecording: Sendable {
     func setMicrophoneMuted(_ muted: Bool) async -> TimeInterval?
     /// Stops capture, finishes all streams, and produces the final audio file.
     func stop() async -> RecordingOutput
+    /// After a `stop` that reported `holdsTracks`: renders each source as 16 kHz mono for the
+    /// models that run after the recording, or skips that when `render` is false, and removes
+    /// the part files either way. The caller deletes the tracks.
+    func takeTracks(render: Bool) async -> [AudioSource: URL]
+}
+
+nonisolated extension AudioRecording {
+    func takeTracks(render: Bool) async -> [AudioSource: URL] { [:] }
 }
 
 // MARK: - Transcription

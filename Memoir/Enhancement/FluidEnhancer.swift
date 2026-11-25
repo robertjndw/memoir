@@ -94,18 +94,17 @@ private nonisolated struct EnhancementRun: Sendable {
 
     func perform() async throws -> [TranscriptLine] {
         guard request.transcribe || request.identifySpeakers else { return request.lines }
-        if request.transcribe, !FluidModels.isInstalled(.enhancedTranscription, in: directory) {
-            throw EnhancementError.modelMissing(.enhancedTranscription)
-        }
-        if request.identifySpeakers, !FluidModels.isInstalled(.speakerIdentification, in: directory) {
-            throw EnhancementError.modelMissing(.speakerIdentification)
-        }
-
-        switch request.audio {
-        case .tracks(let tracks):
-            return try await enhance(tracks: tracks)
-        case .mixed(let url):
-            return try await enhance(mixed: url)
+        var models: [OptionalModel] = []
+        if request.transcribe { models.append(.enhancedTranscription) }
+        if request.identifySpeakers { models.append(.speakerIdentification) }
+        // The diarizer is only loaded after the transcription, which can take minutes.
+        return try await FluidModels.whileRunning(models, in: directory) {
+            switch request.audio {
+            case .tracks(let tracks):
+                try await enhance(tracks: tracks)
+            case .mixed(let url):
+                try await enhance(mixed: url)
+            }
         }
     }
 
@@ -174,6 +173,25 @@ private nonisolated struct EnhancementRun: Sendable {
         let manager = AsrManager(config: .default, models: models)
         let language = request.locale.language.languageCode.flatMap { Language(rawValue: $0.identifier) }
 
+        let results: [[TimedWord]]
+        do {
+            results = try await transcribe(urls, durations: durations, total: total, with: manager, language: language)
+        } catch {
+            // A cancelled or failed run must still release the model.
+            await manager.cleanup()
+            throw error
+        }
+        await manager.cleanup()
+        return results
+    }
+
+    private func transcribe(
+        _ urls: [URL],
+        durations: [TimeInterval],
+        total: TimeInterval,
+        with manager: AsrManager,
+        language: Language?
+    ) async throws -> [[TimedWord]] {
         var results: [[TimedWord]] = []
         var done: TimeInterval = 0
         for (url, duration) in zip(urls, durations) {
@@ -199,7 +217,6 @@ private nonisolated struct EnhancementRun: Sendable {
             done += duration
             report(.transcribing(min(done / total, 1)))
         }
-        await manager.cleanup()
         return results
     }
 
