@@ -78,7 +78,7 @@ struct MeetingDetailView: View {
         .toolbar { toolbar }
         .focusedSceneValue(\.focusedMeeting, FocusedMeeting(
             meeting: meeting,
-            isRecording: isRecording,
+            isActive: model.activeMeetingID == meeting.id,
             commands: commands,
             tab: $tab,
             rename: { titleFocused = true },
@@ -228,7 +228,7 @@ struct MeetingDetailView: View {
                 Button("Reveal in Finder", systemImage: "folder") { commands.reveal(meeting) }
                 Divider()
                 Button("Delete Meeting…", systemImage: "trash", role: .destructive) { commands.delete(meeting) }
-                    .disabled(isRecording)
+                    .disabled(model.activeMeetingID == meeting.id)
             } label: {
                 Label("More", systemImage: "ellipsis")
             }

@@ -69,7 +69,7 @@ private struct MeetingActionsModifier: ViewModifier {
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
-        let canDelete = model.recordingMeetingID != meeting.id
+        let canDelete = model.activeMeetingID != meeting.id
         content
             .contextMenu {
                 Button("Rename…") { commands.rename(meeting) }

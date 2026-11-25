@@ -182,7 +182,7 @@ struct LibraryView: View {
                 }
             },
             delete: { meeting in
-                guard model.recordingMeetingID != meeting.id else { return }
+                guard model.activeMeetingID != meeting.id else { return }
                 deleteTarget = meeting
             }
         )

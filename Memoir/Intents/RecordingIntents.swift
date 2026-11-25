@@ -34,8 +34,19 @@ struct StopRecordingIntent: AppIntent {
             return .result(dialog: "Memoir is not recording.")
         }
         // Also covers a recording that is only just starting, which would otherwise keep running.
-        await model.finishRecording()
-        return .result(dialog: "Recording saved.")
+        switch await model.finishRecording() {
+        case .saved:
+            return .result(dialog: "Recording saved.")
+        case .savedWithoutAudio:
+            if let reason = model.errorMessage {
+                return .result(dialog: "Recording saved without audio. \(reason)")
+            }
+            return .result(dialog: "Recording saved, but no audio was captured.")
+        case .notStarted:
+            throw RecordingIntentError.couldNotStart(model.errorMessage)
+        case .stillStarting:
+            return .result(dialog: "Memoir is still starting the recording, possibly waiting for microphone access. Try again once it is recording.")
+        }
     }
 }
 

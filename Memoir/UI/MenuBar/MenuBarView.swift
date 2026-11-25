@@ -175,7 +175,7 @@ struct FinishSetupRow: View {
 }
 
 #Preview("Saving") {
-    @Previewable @State var model = AppModel.preview(hasCompletedOnboarding: true) { $0.simulate(.finishing) }
+    @Previewable @State var model = AppModel.preview(hasCompletedOnboarding: true) { $0.simulate(.finishing(UUID())) }
     MenuBarView()
         .environment(model)
         .modelContainer(model.container)

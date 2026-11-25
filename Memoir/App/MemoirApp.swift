@@ -60,7 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // tail of the transcript, so the recording is finalized first.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let model = AppModel.shared
-        guard model.recordingState != .idle else { return .terminateNow }
+        guard model.recordingState != .idle else {
+            // A rename or a ticked action item right before quitting may not have been
+            // autosaved yet.
+            try? model.context.save()
+            return .terminateNow
+        }
         Task {
             await model.finishRecording()
             sender.reply(toApplicationShouldTerminate: true)
@@ -123,6 +128,53 @@ extension AppModel {
         }
     }
     #endif
+}
+
+extension ModelContainer {
+    /// Opens the library, or asks the user what to do when it cannot be opened: a damaged file
+    /// or one written by a newer version would otherwise stop the app at every launch.
+    ///
+    /// Runs before the app has finished launching, so the alerts are modal and the only way
+    /// out other than a fresh store is to quit.
+    static func openMemoirStore() -> ModelContainer {
+        let error: any Error
+        do {
+            return try memoirOnDisk()
+        } catch let openError {
+            error = openError
+        }
+        Logger(subsystem: "Memoir", category: "Store").error("Could not open the store: \(error)")
+
+        let app = NSApplication.shared
+        // An agent app's alert would otherwise open behind whatever is frontmost.
+        app.activate()
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = String(localized: "Memoir can't open its library")
+        alert.informativeText = String(localized: """
+            \(error.localizedDescription)
+
+            You can start with an empty library. The current one is not deleted: it is renamed \
+            and kept in the same folder, and your recordings' audio files stay where they are.
+            """)
+        alert.addButton(withTitle: String(localized: "Start with an Empty Library"))
+        alert.addButton(withTitle: String(localized: "Quit"))
+        guard alert.runModal() == .alertFirstButtonReturn else { exit(EXIT_SUCCESS) }
+
+        do {
+            let aside = try moveMemoirStoreAside()
+            Logger(subsystem: "Memoir", category: "Store").notice("Moved the store aside to \(aside.path, privacy: .public)")
+            return try memoirOnDisk()
+        } catch {
+            let failure = NSAlert()
+            failure.alertStyle = .critical
+            failure.messageText = String(localized: "Memoir can't create a new library")
+            failure.informativeText = error.localizedDescription
+            failure.addButton(withTitle: String(localized: "Quit"))
+            failure.runModal()
+            exit(EXIT_FAILURE)
+        }
+    }
 }
 
 private struct RegularAppWindow: ViewModifier {
