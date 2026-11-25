@@ -175,18 +175,33 @@ nonisolated final class MCPSocketListener: @unchecked Sendable {
 nonisolated final class MCPConnection: @unchecked Sendable {
     /// Requests are a few hundred bytes. Anything this long without a newline is not MCP.
     static let maxLineLength = 4 << 20
+    /// Requests are answered one at a time, so a client that sends more than this while
+    /// waiting is flooding us rather than pipelining.
+    static let defaultMaxQueuedLines = 256
+    /// Several large tool results at most. A client that never reads would otherwise make us
+    /// buffer every response it provokes.
+    static let defaultMaxPendingWriteBytes = 16 << 20
 
     let lines: AsyncStream<String>
     private let continuation: AsyncStream<String>.Continuation
+    private let maxPendingWriteBytes: Int
     private let queue = DispatchQueue(label: "Memoir.MCP.connection")
     private let channel: DispatchIO
     private let onClose: @Sendable (MCPConnection) -> Void
     // Only touched on `queue`.
     private var buffer = LineBuffer()
     private var isClosed = false
+    private var pendingWriteBytes = 0
 
-    init(fd: Int32, onClose: @escaping @Sendable (MCPConnection) -> Void) {
-        (lines, continuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+    init(
+        fd: Int32,
+        maxQueuedLines: Int = MCPConnection.defaultMaxQueuedLines,
+        maxPendingWriteBytes: Int = MCPConnection.defaultMaxPendingWriteBytes,
+        onClose: @escaping @Sendable (MCPConnection) -> Void
+    ) {
+        // Oldest first: when full, the new line is the one reported as dropped.
+        (lines, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(maxQueuedLines))
+        self.maxPendingWriteBytes = maxPendingWriteBytes
         self.onClose = onClose
         channel = DispatchIO(type: .stream, fileDescriptor: fd, queue: queue) { _ in Darwin.close(fd) }
         // Deliver whatever arrived instead of waiting to fill a large read.
@@ -197,7 +212,10 @@ nonisolated final class MCPConnection: @unchecked Sendable {
         channel.read(offset: 0, length: Int.max, queue: queue) { [self] done, data, error in
             if let data, !data.isEmpty, !isClosed {
                 for line in buffer.append(data) {
-                    continuation.yield(line)
+                    if case .dropped = continuation.yield(line) {
+                        closeOnQueue(force: true)
+                        return
+                    }
                 }
                 if buffer.pending.count > Self.maxLineLength {
                     closeOnQueue(force: true)
@@ -214,9 +232,16 @@ nonisolated final class MCPConnection: @unchecked Sendable {
         let bytes = Data(line.utf8) + [0x0A]
         queue.async { [self] in
             guard !isClosed else { return }
+            pendingWriteBytes += bytes.count
+            guard pendingWriteBytes <= maxPendingWriteBytes else {
+                closeOnQueue(force: true)
+                return
+            }
             let data = bytes.withUnsafeBytes { DispatchData(bytes: $0) }
             channel.write(offset: 0, data: data, queue: queue) { [self] done, _, error in
-                if done, error != 0 { closeOnQueue(force: true) }
+                guard done else { return }
+                pendingWriteBytes -= bytes.count
+                if error != 0 { closeOnQueue(force: true) }
             }
         }
     }

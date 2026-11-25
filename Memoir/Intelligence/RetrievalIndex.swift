@@ -68,13 +68,13 @@ actor RetrievalIndex {
         guard let best = hits.first, best.score >= 0.05 else {
             return "No passages in the transcript match \"\(query)\"."
         }
-        let ranges = selectPassages(
+        let passages = Self.selectPassages(
             hits: hits.prefix(8).filter { $0.score >= best.score * 0.5 }.map { windows[$0.index].lines },
             lines: lines,
             budget: budget - 20,
             estimator: estimator
         )
-        let body = ranges.map { TranscriptFormat.render(lines[$0]) }.joined(separator: "\n...\n")
+        let body = passages.joined(separator: "\n...\n")
         return "Passages from the transcript, in order:\n\(body)"
     }
 
@@ -163,24 +163,26 @@ actor RetrievalIndex {
             }
             let lines = await lines(of: meeting.id)
             let windows = await windows(of: meeting.id)
-            let passages = (bestWindows[meeting.id] ?? [])
+            let hitWindows = (bestWindows[meeting.id] ?? [])
                 .sorted { $0.score > $1.score }
                 .prefix(passagesPerMeeting)
                 .map { windows[$0.window].lines }
-            let ranges = selectPassages(
-                hits: passages,
+            let passages = Self.selectPassages(
+                hits: hitWindows,
                 lines: lines,
                 budget: perMeeting - estimator.tokens(section),
                 estimator: estimator
             )
-            if !ranges.isEmpty {
-                section += "\nPassages:\n" + ranges.map { TranscriptFormat.render(lines[$0]) }.joined(separator: "\n...\n")
+            if !passages.isEmpty {
+                section += "\nPassages:\n" + passages.joined(separator: "\n...\n")
             }
             let cost = estimator.tokens(section)
             guard cost <= remaining else { break }
             remaining -= cost
             sections.append(section)
         }
+        // An empty string would read to the model as a tool failure rather than as no match.
+        guard !sections.isEmpty else { return "No recorded meetings mention \"\(query)\"." }
         return sections.joined(separator: "\n\n")
     }
 
@@ -219,13 +221,13 @@ actor RetrievalIndex {
     // MARK: Helpers
 
     /// Takes hit windows in rank order, widens each by one line on both sides, and keeps
-    /// adding until the rendered passages would exceed `budget`.
-    private func selectPassages(
+    /// adding until the rendered passages would exceed `budget`. Returns each passage rendered.
+    nonisolated static func selectPassages(
         hits: [Range<Int>],
         lines: [TranscriptLine],
         budget: Int,
         estimator: TokenEstimator
-    ) -> [ClosedRange<Int>] {
+    ) -> [String] {
         var positions: [Int] = []
         var accepted: [ClosedRange<Int>] = []
         for hit in hits {
@@ -234,30 +236,51 @@ actor RetrievalIndex {
                 total + estimator.tokens(TranscriptFormat.render(lines[range])) + 2
             }
             if cost > budget {
-                if accepted.isEmpty, let first = candidate.first {
-                    // Even one passage is too long: keep the matched lines alone, cut to fit.
-                    return [Self.trim(first, toFit: budget, lines: lines, estimator: estimator)]
+                if accepted.isEmpty, let first = candidate.first, !hit.isEmpty {
+                    // Even one passage is too long: keep the matched lines, cut the rest to fit.
+                    let matched = hit.lowerBound...(hit.upperBound - 1)
+                    return [trim(first, keeping: matched, toFit: budget, lines: lines, estimator: estimator)]
                 }
                 break
             }
             positions += Array(hit)
             accepted = candidate
         }
-        return accepted
+        return accepted.map { TranscriptFormat.render(lines[$0]) }
     }
 
-    private static func trim(
+    /// Context lines go first, since the matched lines are what the caller asked about. Only
+    /// when the matched lines alone are too long are they cut from the end, and a single line
+    /// that still does not fit is truncated (after its timestamp and speaker, which citations need).
+    private nonisolated static func trim(
         _ range: ClosedRange<Int>,
+        keeping matched: ClosedRange<Int>,
         toFit budget: Int,
         lines: [TranscriptLine],
         estimator: TokenEstimator
-    ) -> ClosedRange<Int> {
-        var upper = range.upperBound
-        while upper > range.lowerBound,
-              estimator.tokens(TranscriptFormat.render(lines[range.lowerBound...upper])) > budget {
+    ) -> String {
+        func fits(_ candidate: ClosedRange<Int>) -> Bool {
+            estimator.tokens(TranscriptFormat.render(lines[candidate])) <= budget
+        }
+        let matched = max(matched.lowerBound, range.lowerBound)...min(matched.upperBound, range.upperBound)
+        let attempts = [
+            range,
+            matched.lowerBound...range.upperBound,
+            range.lowerBound...matched.upperBound,
+            matched,
+        ]
+        if let fitting = attempts.first(where: fits) {
+            return TranscriptFormat.render(lines[fitting])
+        }
+        var upper = matched.upperBound
+        while upper > matched.lowerBound, !fits(matched.lowerBound...upper) {
             upper -= 1
         }
-        return range.lowerBound...upper
+        let kept = matched.lowerBound...upper
+        guard fits(kept) else {
+            return estimator.truncate(TranscriptFormat.render(lines[matched.lowerBound]), toTokens: budget)
+        }
+        return TranscriptFormat.render(lines[kept])
     }
 
     private func windows(of id: UUID) async -> [Window] {

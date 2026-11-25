@@ -65,15 +65,20 @@ a Unix socket at `~/Library/Application Support/Memoir/mcp.sock`.
 
 MCP clients start `memoir-mcp`, a helper in the app bundle that just passes
 data between stdin/stdout and the socket (the same idea as `xcrun mcpbridge`).
-It launches Memoir in the background if it isn't running. If the setting is
-off, the helper answers every request with an error saying where to turn it on,
-rather than exiting and leaving the client with a server that failed to start.
+It launches Memoir in the background if it isn't running. If it can't reach
+Memoir, the helper answers every request with an error instead of exiting and
+leaving the client with a server that failed to start. It tries again on each
+request, so once the setting is on or Memoir has finished starting, the next
+request goes through.
 
 ## Troubleshooting
 
-"Memoir access for AI assistants is turned off": turn the setting on, then
-reconnect the server in your client (`/mcp` in Claude Code). The helper only
-checks for the socket when it starts.
+"Memoir access for AI assistants is turned off": Memoir is running but isn't
+serving the socket. Turn the setting on, then send the request again.
+
+"Memoir could not be reached": Memoir isn't running, is still starting, or
+didn't open the socket in time. Try again in a moment, and check the setting
+if it keeps happening.
 
 The client can't find `memoir-mcp`: the path depends on where Memoir is
 installed. Copy the command from Settings > AI Assistants, which uses the path

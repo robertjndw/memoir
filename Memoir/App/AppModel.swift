@@ -483,6 +483,7 @@ final class AppModel {
     /// Chat sessions index the store when they are created and would keep answering from
     /// the old transcript or summary.
     private func contentChanged(in meetingID: UUID) {
+        mcpServer.libraryChanged()
         chats[.library]?.invalidateSession()
         chats[.meeting(meetingID)]?.invalidateSession()
     }
@@ -528,6 +529,7 @@ final class AppModel {
         if lastRecording?.meetingID == id { lastRecording = nil }
         context.delete(meeting)
         try? context.save()
+        mcpServer.libraryChanged()
         try? FileManager.default.removeItem(at: RecordingFiles.folder(for: id))
     }
 
