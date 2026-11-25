@@ -26,11 +26,27 @@ struct TranscriptLineRow: View {
     let emphasis: TranscriptLineEmphasis
     /// Set when the recording can be played; lines become click-to-seek buttons.
     let playback: PlaybackController?
+    /// Set when identified speakers can be named, which is never in a live transcript.
+    var meeting: Meeting?
 
     @State private var isHovered = false
+    @State private var isNameHovered = false
+    @State private var isRenaming = false
 
     static func tint(for speaker: Speaker) -> Color {
         speaker == .me ? .accentColor : .secondary
+    }
+
+    static func tint(for speaker: SpeakerID) -> AnyShapeStyle {
+        if let color = SpeakerPalette.color(for: speaker) {
+            AnyShapeStyle(SpeakerNameStyle(color: color))
+        } else {
+            AnyShapeStyle(tint(for: speaker.speaker))
+        }
+    }
+
+    private var renamableVoice: Int? {
+        meeting == nil ? nil : line.voice
     }
 
     var body: some View {
@@ -48,10 +64,8 @@ struct TranscriptLineRow: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            SpeakerAvatar(speaker: line.speaker)
-            Text(line.speaker.label)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Self.tint(for: line.speaker))
+            SpeakerAvatar(speaker: line.speakerID, name: line.name)
+            speakerName
             if let playback {
                 Button {
                     playback.seek(to: line.start, play: true)
@@ -75,10 +89,57 @@ struct TranscriptLineRow: View {
         .padding(.horizontal, 8)
     }
 
+    @ViewBuilder
+    private var speakerName: some View {
+        let name = Text(line.label)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Self.tint(for: line.speakerID))
+        if renamableVoice != nil {
+            // Looks like plain text until hovered, like a link, so a long transcript is not full of buttons.
+            Button {
+                isRenaming = true
+            } label: {
+                name
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(isNameHovered ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 4))
+                    .padding(.horizontal, -4)
+                    .padding(.vertical, -1)
+            }
+            .buttonStyle(.plain)
+            .onHover { isNameHovered = $0 }
+            .animation(.easeOut(duration: 0.12), value: isNameHovered)
+            .help("Rename Speaker")
+            .accessibilityLabel(line.label)
+            .accessibilityHint("Renames this speaker throughout the meeting")
+            .popover(isPresented: $isRenaming, arrowEdge: .bottom) { renamePopover }
+        } else {
+            name
+        }
+    }
+
+    @ViewBuilder
+    private var renamePopover: some View {
+        if let meeting, let voice = renamableVoice {
+            SpeakerRenamePopover(meeting: meeting, voice: voice)
+        }
+    }
+
     // MARK: - Line
 
     @ViewBuilder
     private var content: some View {
+        // Rows that open a block anchor the rename popover at the name instead.
+        if startsBlock || renamableVoice == nil {
+            lineContent
+        } else {
+            lineContent
+                .popover(isPresented: $isRenaming, arrowEdge: .bottom) { renamePopover }
+        }
+    }
+
+    @ViewBuilder
+    private var lineContent: some View {
         if let playback {
             // A selectable Text swallows clicks, so seekable lines trade drag-selection for
             // click-to-seek and offer copying through the context menu instead.
@@ -90,23 +151,44 @@ struct TranscriptLineRow: View {
             }
             .buttonStyle(.plain)
             .onHover { isHovered = $0 }
-            .contextMenu {
-                Button("Play from Here", systemImage: "play") {
-                    playback.seek(to: line.start, play: true)
-                }
-                Divider()
-                Button("Copy", systemImage: "doc.on.doc") {
-                    copy(line.text)
-                }
-                Button("Copy with Timestamp") {
-                    copy("[\(LibraryFormat.timecode(line.start))] \(line.speaker.label): \(line.text)")
-                }
-            }
+            .contextMenu { contextMenu }
             .accessibilityHint("Plays the recording from here")
             .accessibilityAddTraits(emphasis == .current ? .isSelected : [])
+            .accessibilityActions { renameAction }
         } else {
             lineText
                 .textSelection(.enabled)
+                .contextMenu { contextMenu }
+                .accessibilityActions { renameAction }
+        }
+    }
+
+    @ViewBuilder
+    private var contextMenu: some View {
+        if let playback {
+            Button("Play from Here", systemImage: "play") {
+                playback.seek(to: line.start, play: true)
+            }
+            Divider()
+        }
+        if renamableVoice != nil {
+            Button("Rename Speaker…", systemImage: "person.crop.circle") {
+                isRenaming = true
+            }
+            Divider()
+        }
+        Button("Copy", systemImage: "doc.on.doc") {
+            copy(line.text)
+        }
+        Button("Copy with Timestamp") {
+            copy("[\(LibraryFormat.timecode(line.start))] \(line.label): \(line.text)")
+        }
+    }
+
+    @ViewBuilder
+    private var renameAction: some View {
+        if renamableVoice != nil {
+            Button("Rename Speaker") { isRenaming = true }
         }
     }
 
@@ -186,17 +268,50 @@ struct MutedMarkerRow: View {
     }
 }
 
+/// A named speaker shows initials, everyone else a glyph: one person, or two for the
+/// other side of a call that was never split into voices.
 struct SpeakerAvatar: View {
-    let speaker: Speaker
+    let speaker: SpeakerID
+    var name: String?
     var size: CGFloat = 20
 
+    init(speaker: SpeakerID, name: String? = nil, size: CGFloat = 20) {
+        self.speaker = speaker
+        self.name = name
+        self.size = size
+    }
+
+    init(speaker: Speaker, size: CGFloat = 20) {
+        self.init(speaker: SpeakerID(speaker: speaker), size: size)
+    }
+
     var body: some View {
-        Image(systemName: speaker == .others ? "person.2.fill" : "person.fill")
-            .font(.system(size: size * 0.48, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(speaker == .me ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(Color.gray.gradient), in: .circle)
-            .accessibilityHidden(true)
+        Group {
+            if let name, !name.isEmpty {
+                Text(PersonAvatar.initials(of: name))
+                    .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                    .padding(size * 0.08)
+            } else {
+                Image(systemName: speaker.speaker == .others && speaker.voice == nil ? "person.2.fill" : "person.fill")
+                    .font(.system(size: size * 0.48, weight: .semibold))
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: size, height: size)
+        .background(fill, in: .circle)
+        .accessibilityHidden(true)
+    }
+
+    private var fill: AnyShapeStyle {
+        if speaker.speaker == .me {
+            AnyShapeStyle(Color.accentColor.gradient)
+        } else if let color = SpeakerPalette.color(for: speaker) {
+            AnyShapeStyle(color.gradient)
+        } else {
+            AnyShapeStyle(Color.gray.gradient)
+        }
     }
 }
 

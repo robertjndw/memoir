@@ -4,11 +4,11 @@ import SwiftUI
 nonisolated struct SpeakerSpan: Equatable, Sendable {
     var start: TimeInterval
     var end: TimeInterval
-    var speaker: Speaker
+    var speaker: SpeakerID
 
     /// Spans must be sorted by start. Gaps of up to 1.5 s still count as the previous speaker,
     /// otherwise every pause between sentences shows up as a grey bar.
-    static func speaker(at time: TimeInterval, in spans: [SpeakerSpan]) -> Speaker? {
+    static func speaker(at time: TimeInterval, in spans: [SpeakerSpan]) -> SpeakerID? {
         var low = 0
         var high = spans.count
         while low < high {
@@ -22,8 +22,10 @@ nonisolated struct SpeakerSpan: Equatable, Sendable {
 }
 
 /// Same colours as the speaker names in the transcript.
-func speakerColor(_ speaker: Speaker?) -> Color {
-    speaker == .me ? .accentColor : .primary
+func speakerColor(_ speaker: SpeakerID?) -> Color {
+    guard let speaker else { return .primary }
+    if speaker.speaker == .me { return .accentColor }
+    return SpeakerPalette.color(for: speaker) ?? .primary
 }
 
 /// Scrubber drawn over the recording's waveform, coloured by speaker.
@@ -116,7 +118,7 @@ struct LiveWaveform: View {
                 let x = CGFloat(index) * step + (step - barWidth) / 2
                 let rect = CGRect(x: x, y: mid - height / 2, width: barWidth, height: height)
                 let isSilent = level < 0.02
-                let color: Color = isSilent ? .secondary : speakerColor(sample.microphone >= sample.system ? .me : .others)
+                let color: Color = isSilent ? .secondary : speakerColor(SpeakerID(speaker: sample.microphone >= sample.system ? .me : .others))
                 let age = min(1, 0.15 + Double(index) / 10)
                 context.fill(Path(roundedRect: rect, cornerRadius: barWidth / 2), with: .color(color.opacity((isSilent ? 0.4 : 0.9) * age)))
             }
@@ -148,7 +150,12 @@ extension WaveformLoader {
 
 #Preview("Scrubber") {
     @Previewable @State var progress = 0.35
-    let spans = (0..<20).map { SpeakerSpan(start: Double($0) * 120, end: Double($0) * 120 + 110, speaker: $0.isMultiple(of: 3) ? .me : .others) }
+    let spans = (0..<20).map { index in
+        SpeakerSpan(
+            start: Double(index) * 120, end: Double(index) * 120 + 110,
+            speaker: index.isMultiple(of: 3) ? SpeakerID(speaker: .me) : SpeakerID(speaker: .others, voice: index % 3)
+        )
+    }
     VStack(spacing: 24) {
         WaveformScrubber(peaks: WaveformLoader.preview, speakers: spans, duration: 2400, progress: progress, onScrub: { progress = $0 }, onCommit: { progress = $0 })
             .frame(height: 36)

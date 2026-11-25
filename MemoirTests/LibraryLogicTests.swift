@@ -17,7 +17,7 @@ struct LibraryLogicTests {
     @Test func blocksGroupConsecutiveSpeakers() {
         let lines = [line(.me, 0), line(.me, 2), line(.others, 4), line(.me, 6)]
         let blocks = TranscriptGrouping.blocks(lines)
-        #expect(blocks.map(\.speaker) == [.me, .others, .me])
+        #expect(blocks.map(\.speaker.speaker) == [.me, .others, .me])
         #expect(blocks.map { $0.lines.count } == [2, 1, 1])
     }
 

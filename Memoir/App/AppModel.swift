@@ -35,6 +35,27 @@ final class AppModel {
         var error: String?
     }
 
+    /// The optional models at work on a finished recording.
+    struct EnhancementActivity: Equatable {
+        enum Step: Equatable {
+            case transcribing
+            case identifyingSpeakers
+        }
+
+        var step: Step
+        /// 0...1 within the step, nil before the first report.
+        var progress: Double?
+    }
+
+    /// Which of the optional steps apply to a recording: switched on, model installed, and
+    /// for transcription a language the model knows.
+    struct EnhancementPlan: Equatable {
+        var transcribe = false
+        var identifySpeakers = false
+
+        var isEmpty: Bool { !transcribe && !identifySpeakers }
+    }
+
     /// Shown in the menu bar for a while after a recording stops.
     struct FinishedRecording: Equatable {
         let meetingID: UUID
@@ -70,6 +91,13 @@ final class AppModel {
     private(set) var retranscribing: Set<UUID> = []
     /// Why the last attempt to transcribe a meeting from its file produced nothing.
     private(set) var transcriptionErrors: [UUID: String] = [:]
+    /// Download state of the optional models. Owned here rather than by the Settings window,
+    /// so a download that outlives the window still shows its progress when Settings reopens.
+    let speakerModel = OptionalModelController(model: .speakerIdentification)
+    let transcriptionModel = OptionalModelController(model: .enhancedTranscription)
+    private(set) var enhancing: [UUID: EnhancementActivity] = [:]
+    /// Why the optional models last failed on a meeting. Its transcript is left as it was.
+    private(set) var enhancementErrors: [UUID: String] = [:]
 
     /// Meeting the Library should select when it opens or comes forward.
     var librarySelection: UUID?
@@ -91,6 +119,9 @@ final class AppModel {
     /// Recording time the current mute began. Only closed ranges are stored on the meeting.
     @ObservationIgnored private var mutedSince: TimeInterval?
     @ObservationIgnored private var isChangingMute = false
+    /// Word timings of the live lines by line id. Only kept in memory, for splitting lines
+    /// between speakers right after the recording.
+    @ObservationIgnored private var liveWords: [UUID: [TimedWord]] = [:]
     @ObservationIgnored private var backgroundTasks: [Task<Void, Never>] = []
     @ObservationIgnored private var chats: [ChatScope: ChatController] = [:]
     @ObservationIgnored private var regularWindowCount = 0
@@ -188,6 +219,9 @@ final class AppModel {
     /// it is complete, and the parts are removed only after that, so a later run either adopts
     /// the finished file or mixes the parts again.
     func recoverAudio() async {
+        // A quit while the optional models were at work leaves their input behind. Nothing
+        // picks that work up again, so the files are only taking up space.
+        RecordingRecovery.removeStaleTracks(skipping: Set(enhancing.keys).union([activeMeetingID].compactMap { $0 }))
         let descriptor = FetchDescriptor<Meeting>(predicate: #Predicate { !$0.hasAudio })
         let ids = ((try? context.fetch(descriptor)) ?? []).map(\.id)
         for id in ids where !Task.isCancelled {
@@ -242,7 +276,10 @@ final class AppModel {
         meeting.attendees = event?.attendees ?? []
 
         let folder = RecordingFiles.folder(for: meeting.id)
-        let recorder = services.makeRecorder(folder)
+        // Decided now because the recorder has to know at stop whether to keep each source
+        // on its own. A model installed during the meeting applies from the next one.
+        let plan = await enhancementPlan(for: locale)
+        let recorder = services.makeRecorder(folder, !plan.isEmpty)
         let streams: CaptureStreams
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -265,6 +302,7 @@ final class AppModel {
         isMicrophoneMuted = false
         mutedSince = nil
         liveLines = []
+        liveWords = [:]
         volatileText = [:]
         levels = AudioLevels()
         recordingStartDate = now
@@ -354,8 +392,27 @@ final class AppModel {
             try? context.save()
             lastRecording = FinishedRecording(meetingID: meetingID, date: .now)
             contentChanged(in: meetingID)
-            if settings.autoSummarize, !meeting.segments.isEmpty {
-                Task { await summarize(meeting) }
+            let tracks = output.tracks
+            let words = liveWords
+            // Not awaited: the recorder is free for the next meeting while the models work.
+            // The summary waits for them so it is written from the final transcript.
+            Task {
+                if !tracks.isEmpty {
+                    let locale = Locale(identifier: meeting.localeIdentifier)
+                    await runEnhancement(
+                        on: meeting, audio: .tracks(tracks), plan: await enhancementPlan(for: locale), words: words
+                    )
+                    for url in tracks.values {
+                        try? FileManager.default.removeItem(at: url)
+                    }
+                }
+                if isStored(meeting), settings.autoSummarize, !meeting.segments.isEmpty {
+                    await summarize(meeting)
+                }
+            }
+        } else {
+            for url in output.tracks.values {
+                try? FileManager.default.removeItem(at: url)
             }
         }
         // Set last so it is not replaced by a transcription error reported during the drain.
@@ -372,6 +429,7 @@ final class AppModel {
         recordingStartDate = nil
         isMicrophoneMuted = false
         mutedSince = nil
+        liveWords = [:]
         volatileText = [:]
         levels = AudioLevels()
         services.detector.setRecording(false)
@@ -459,6 +517,7 @@ final class AppModel {
         // The two speakers finalize independently, so a line can arrive slightly out of order.
         let index = liveLines.lastIndex { $0.start <= line.start }.map { $0 + 1 } ?? 0
         liveLines.insert(line, at: index)
+        if let words = update.words { liveWords[line.id] = words }
 
         let segment = TranscriptSegment(line: line)
         context.insert(segment)
@@ -555,7 +614,15 @@ final class AppModel {
     /// Replaces the transcript with one made from the saved audio file.
     func retranscribe(_ meeting: Meeting) async {
         let id = meeting.id
-        guard let url = meeting.audioURL, !retranscribing.contains(id), activeMeetingID != id else { return }
+        guard let url = meeting.audioURL, !retranscribing.contains(id), enhancing[id] == nil,
+              activeMeetingID != id
+        else { return }
+        let plan = await enhancementPlan(for: Locale(identifier: meeting.localeIdentifier))
+        if plan.transcribe {
+            // The optional model does both steps in one go.
+            await runEnhancement(on: meeting, audio: .mixed(url), plan: plan)
+            return
+        }
         retranscribing.insert(id)
         transcriptionErrors[id] = nil
         defer { retranscribing.remove(id) }
@@ -579,6 +646,16 @@ final class AppModel {
             transcriptionErrors[id] = String(localized: "No speech was found in this recording.")
             return
         }
+        replaceTranscript(of: meeting, with: lines)
+        if plan.identifySpeakers {
+            // Released by hand rather than by the defer above, which would only run after
+            // the speakers were identified and keep the "transcribing" state up meanwhile.
+            retranscribing.remove(id)
+            await runEnhancement(on: meeting, audio: .mixed(url), plan: plan)
+        }
+    }
+
+    private func replaceTranscript(of meeting: Meeting, with lines: [TranscriptLine]) {
         for segment in meeting.segments {
             context.delete(segment)
         }
@@ -588,7 +665,92 @@ final class AppModel {
             segment.meeting = meeting
         }
         try? context.save()
-        contentChanged(in: id)
+        contentChanged(in: meeting.id)
+    }
+
+    // MARK: - Optional models
+
+    func enhancementPlan(for locale: Locale) async -> EnhancementPlan {
+        var plan = EnhancementPlan()
+        if settings.identifySpeakers {
+            plan.identifySpeakers = await services.optionalModels.isInstalled(.speakerIdentification)
+        }
+        if settings.enhancedTranscription, services.enhancer.supportsTranscription(in: locale) {
+            plan.transcribe = await services.optionalModels.isInstalled(.enhancedTranscription)
+        }
+        return plan
+    }
+
+    /// Tells the speakers of an existing recording apart, keeping its text.
+    func identifySpeakers(in meeting: Meeting) async {
+        guard let url = meeting.audioURL, !retranscribing.contains(meeting.id), activeMeetingID != meeting.id,
+              !meeting.segments.isEmpty
+        else { return }
+        var plan = await enhancementPlan(for: Locale(identifier: meeting.localeIdentifier))
+        plan.transcribe = false
+        await runEnhancement(on: meeting, audio: .mixed(url), plan: plan)
+    }
+
+    /// Swaps in the new transcript only once it is complete, so a failure keeps the old one.
+    private func runEnhancement(
+        on meeting: Meeting,
+        audio: EnhancementRequest.Audio,
+        plan: EnhancementPlan,
+        words: [UUID: [TimedWord]] = [:]
+    ) async {
+        let id = meeting.id
+        guard !plan.isEmpty, enhancing[id] == nil, isStored(meeting) else { return }
+        enhancing[id] = EnhancementActivity(step: plan.transcribe ? .transcribing : .identifyingSpeakers)
+        enhancementErrors[id] = nil
+        defer { enhancing[id] = nil }
+
+        let request = EnhancementRequest(
+            audio: audio,
+            locale: Locale(identifier: meeting.localeIdentifier),
+            lines: meeting.sortedLines,
+            words: words,
+            transcribe: plan.transcribe,
+            identifySpeakers: plan.identifySpeakers
+        )
+        var result: [TranscriptLine]?
+        do {
+            for try await progress in services.enhancer.enhance(request) {
+                switch progress {
+                case .transcribing(let fraction):
+                    enhancing[id] = EnhancementActivity(step: .transcribing, progress: fraction)
+                case .identifyingSpeakers(let fraction):
+                    enhancing[id] = EnhancementActivity(step: .identifyingSpeakers, progress: fraction)
+                case .finished(let lines):
+                    result = lines
+                }
+            }
+        } catch {
+            if isStored(meeting) { enhancementErrors[id] = error.localizedDescription }
+            return
+        }
+        // An empty result means the models heard nothing, which is no reason to throw away
+        // what the live transcript has.
+        guard isStored(meeting), let result, !result.isEmpty else { return }
+        if plan.identifySpeakers {
+            // The voices are numbered afresh, so the old names would land on other people.
+            meeting.speakerNames = [:]
+        }
+        replaceTranscript(of: meeting, with: result)
+    }
+
+    /// An empty name goes back to "Speaker N".
+    func renameSpeaker(_ voice: Int, to name: String, in meeting: Meeting) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var names = meeting.speakerNames
+        guard names[voice] ?? "" != name else { return }
+        names[voice] = name.isEmpty ? nil : name
+        meeting.speakerNames = names
+        try? context.save()
+        contentChanged(in: meeting.id)
+    }
+
+    func dismissEnhancementError(for meetingID: UUID) {
+        enhancementErrors[meetingID] = nil
     }
 
     /// Chat sessions index the store when they are created and would keep answering from
@@ -637,6 +799,7 @@ final class AppModel {
         chats[.library]?.invalidateSession()
         summaryActivity[id] = nil
         transcriptionErrors[id] = nil
+        enhancementErrors[id] = nil
         if librarySelection == id { librarySelection = nil }
         if lastRecording?.meetingID == id { lastRecording = nil }
         context.delete(meeting)
@@ -728,6 +891,14 @@ extension AppModel {
 
     func simulateTranscribing(_ meeting: Meeting) {
         retranscribing.insert(meeting.id)
+    }
+
+    func simulateEnhancing(_ meeting: Meeting, step: EnhancementActivity.Step = .identifyingSpeakers, progress: Double? = 0.4) {
+        enhancing[meeting.id] = EnhancementActivity(step: step, progress: progress)
+    }
+
+    func simulateEnhancementError(_ meeting: Meeting, message: String) {
+        enhancementErrors[meeting.id] = message
     }
 
     func simulateUpcoming(_ event: CalendarMeeting?) {

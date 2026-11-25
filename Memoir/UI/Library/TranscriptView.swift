@@ -23,7 +23,18 @@ struct TranscriptView: View {
             VStack(spacing: 0) {
                 findBar(matches: matches)
                 Divider()
-                transcript(lines: lines, matches: matches)
+                if !isLive {
+                    EnhancementStatusBar(meeting: meeting)
+                }
+                // Replacing the transcript gives every line a new ID, so the first one changing
+                // is when the improved transcript has arrived. A live transcript only grows.
+                let replacementKey = isLive ? nil : lines.first?.id
+                ZStack {
+                    transcript(lines: lines, matches: matches)
+                        .id(replacementKey)
+                        .transition(.blurReplace)
+                }
+                .animation(.smooth(duration: 0.4), value: replacementKey)
             }
             // `initial` covers Command-F from another tab, where this view appears with the
             // request already set.
@@ -49,8 +60,13 @@ struct TranscriptView: View {
             } actions: {
                 // Same style as the Summarize button in the summary tab.
                 VStack(spacing: 12) {
-                    if model.retranscribing.contains(meeting.id) {
+                    if let activity = model.enhancing[meeting.id] {
+                        TranscribingStatus(activity.step.title)
+                            .font(.title3)
+                            .transition(.blurReplace)
+                    } else if model.retranscribing.contains(meeting.id) {
                         TranscribingStatus()
+                            .font(.title3)
                             .transition(.blurReplace)
                     } else {
                         Button("Transcribe Recording", systemImage: "waveform") {
@@ -59,7 +75,7 @@ struct TranscriptView: View {
                         .buttonStyle(.glassProminent)
                         .controlSize(.large)
                         .transition(.blurReplace)
-                        if let failure = model.transcriptionErrors[meeting.id] {
+                        if let failure = model.transcriptionErrors[meeting.id] ?? model.enhancementErrors[meeting.id] {
                             Label(failure, systemImage: "exclamationmark.triangle.fill")
                                 .symbolRenderingMode(.multicolor)
                                 .font(.callout)
@@ -69,6 +85,7 @@ struct TranscriptView: View {
                     }
                 }
                 .animation(.smooth(duration: 0.3), value: model.retranscribing.contains(meeting.id))
+                .animation(.smooth(duration: 0.3), value: model.enhancing[meeting.id]?.step)
                 .animation(.smooth(duration: 0.3), value: model.transcriptionErrors[meeting.id])
             }
         } else {
@@ -76,23 +93,6 @@ struct TranscriptView: View {
         }
     }
 
-    /// Waveform instead of sparkles, since transcription uses the speech model and not Apple Intelligence.
-    private struct TranscribingStatus: View {
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-        var body: some View {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .foregroundStyle(.tint)
-                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
-                    .accessibilityHidden(true)
-                ShimmeringText("Transcribing…")
-            }
-            .font(.title3)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.updatesFrequently)
-        }
-    }
 
     // MARK: - Find
 
@@ -155,7 +155,8 @@ struct TranscriptView: View {
             query: query,
             focusedMatch: matches.isEmpty ? nil : matches[min(matchPosition, matches.count - 1)],
             isLive: isLive,
-            playback: playback
+            playback: playback,
+            meeting: meeting
         )
     }
 }
@@ -164,6 +165,34 @@ struct TranscriptView: View {
 #Preview("Transcript") {
     @Previewable @State var model = AppModel.preview(samples: true)
     TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController(), findRequested: .constant(false))
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Speakers") {
+    @Previewable @State var model = AppModel.preview(samples: true)
+    TranscriptView(meeting: model.previewMeeting("Planning Sync"), playback: PlaybackController(), findRequested: .constant(false))
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Identifying speakers") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        $0.simulateEnhancing($0.previewMeeting("Design Review"))
+    }
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController(), findRequested: .constant(false))
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Improvement failed") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        $0.simulateEnhancementError($0.previewMeeting("Planning Sync"), message: "The speaker model could not be loaded.")
+    }
+    TranscriptView(meeting: model.previewMeeting("Planning Sync"), playback: PlaybackController(), findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)

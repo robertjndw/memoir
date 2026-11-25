@@ -12,6 +12,9 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape") {
                 GeneralPane()
             }
+            Tab("Transcription", systemImage: "waveform") {
+                TranscriptionPane(speakers: model.speakerModel, accuracy: model.transcriptionModel)
+            }
             Tab("Detection", systemImage: "dot.radiowaves.left.and.right") {
                 DetectionPane(permissions: permissions)
             }
@@ -42,8 +45,6 @@ struct SettingsView: View {
 private struct GeneralPane: View {
     @Environment(AppModel.self) private var model
     @Environment(Updater.self) private var updater
-    @State private var locales: [Locale] = []
-    @State private var speech = SpeechModelController()
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
 
@@ -67,26 +68,6 @@ private struct GeneralPane: View {
                 }
             } footer: {
                 Text("Memoir starts in the menu bar so it can notice meetings.")
-            }
-
-            Section {
-                Picker("Language", selection: $settings.localeIdentifier) {
-                    Text("System Language").tag("")
-                    Divider()
-                    ForEach(languageChoices, id: \.identifier) { locale in
-                        Text(localizedName(of: locale)).tag(locale.identifier)
-                    }
-                }
-                LabeledContent("Speech model") {
-                    ModelStatusView(
-                        controller: speech,
-                        download: { speech.download(locale: model.settings.transcriptionLocale, using: model.services.speechModels) }
-                    )
-                }
-            } header: {
-                Text("Transcription")
-            } footer: {
-                Text("Transcription runs entirely on this Mac. Audio is never sent anywhere.")
             }
 
             Section {
@@ -120,23 +101,9 @@ private struct GeneralPane: View {
         }
         .formStyle(.grouped)
         .fixedSize(horizontal: false, vertical: true)
-        .task {
-            locales = await model.services.speechModels.supportedLocales()
-                .sorted { localizedName(of: $0).localizedStandardCompare(localizedName(of: $1)) == .orderedAscending }
-        }
-        .task(id: settings.localeIdentifier) {
-            await speech.refresh(locale: model.settings.transcriptionLocale, using: model.services.speechModels)
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginStatus = SMAppService.mainApp.status
         }
-    }
-
-    /// Keeps a previously chosen language selectable even if it is missing from the list.
-    private var languageChoices: [Locale] {
-        let current = model.settings.localeIdentifier
-        guard !current.isEmpty, !locales.contains(where: { $0.identifier == current }) else { return locales }
-        return locales + [Locale(identifier: current)]
     }
 
     private var loginBinding: Binding<Bool> {
@@ -159,43 +126,136 @@ private struct GeneralPane: View {
     }
 }
 
-private struct ModelStatusView: View {
-    let controller: SpeechModelController
-    let download: () -> Void
+// MARK: - Transcription
+
+private struct TranscriptionPane: View {
+    let speakers: OptionalModelController
+    let accuracy: OptionalModelController
+
+    @Environment(AppModel.self) private var model
+    @State private var locales: [Locale] = []
+    @State private var speech = SpeechModelController()
 
     var body: some View {
-        HStack(spacing: 8) {
-            switch controller.status {
-            case nil:
-                ProgressView().controlSize(.small)
-            case .installed:
-                Label("Installed", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            case .unsupported:
-                Label("Not supported", systemImage: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            case .downloading:
-                if let progress = controller.progress {
-                    ProgressView(value: progress)
-                        .frame(width: 100)
-                        .accessibilityLabel("Download progress")
-                } else {
-                    ProgressView().controlSize(.small)
+        @Bindable var settings = model.settings
+        Form {
+            Section {
+                Picker("Language", selection: $settings.localeIdentifier) {
+                    Text("System Language").tag("")
+                    Divider()
+                    ForEach(languageChoices, id: \.identifier) { locale in
+                        Text(localizedName(of: locale)).tag(locale.identifier)
+                    }
                 }
-                Text("Downloading")
-                    .foregroundStyle(.secondary)
-            case .notInstalled:
-                Text("Not downloaded")
-                    .foregroundStyle(.secondary)
-                Button("Download", action: download)
+                ModelStatusRow(
+                    title: "Speech model",
+                    availability: speech.availability,
+                    failure: speech.failure,
+                    download: { speech.download(locale: model.settings.transcriptionLocale, using: model.services.speechModels) }
+                )
+            } footer: {
+                Text("Transcription runs entirely on this Mac. Audio is never sent anywhere.")
+            }
+
+            Section("Speakers") {
+                OptionalModelRows(controller: speakers, isOn: \.identifySpeakers)
+            }
+
+            Section {
+                OptionalModelRows(controller: accuracy, isOn: \.enhancedTranscription)
+                if settings.enhancedTranscription,
+                   !model.services.enhancer.supportsTranscription(in: settings.transcriptionLocale) {
+                    Text("\(localizedName(of: settings.transcriptionLocale)) isn't supported, so its meetings keep the live transcript.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Accuracy")
+            } footer: {
+                Text("Both run entirely on this Mac. The models are open source and downloaded once from Hugging Face. \(Text(OptionalModel.speakerIdentification.credit)) \(Text(OptionalModel.enhancedTranscription.credit))")
             }
         }
-        .help(controller.failure ?? "")
-        if let failure = controller.failure {
-            Text(failure)
-                .font(.caption)
-                .foregroundStyle(.red)
+        .formStyle(.grouped)
+        .fixedSize(horizontal: false, vertical: true)
+        .task {
+            locales = await model.services.speechModels.supportedLocales()
+                .sorted { localizedName(of: $0).localizedStandardCompare(localizedName(of: $1)) == .orderedAscending }
         }
+        .task(id: settings.localeIdentifier) {
+            await speech.refresh(locale: model.settings.transcriptionLocale, using: model.services.speechModels)
+        }
+        .task {
+            await speakers.refresh(using: model.services.optionalModels)
+            await accuracy.refresh(using: model.services.optionalModels)
+        }
+    }
+
+    /// Keeps a previously chosen language selectable even if it is missing from the list.
+    private var languageChoices: [Locale] {
+        let current = model.settings.localeIdentifier
+        guard !current.isEmpty, !locales.contains(where: { $0.identifier == current }) else { return locales }
+        return locales + [Locale(identifier: current)]
+    }
+}
+
+/// The toggle for one optional model and, below it, the state of its download.
+///
+/// Modeled on how macOS treats optional downloads: turning the feature on fetches what it
+/// needs, turning it off keeps the download until it is removed, and a failed download leaves
+/// the feature on with a Retry, since the user's choice was to have it.
+private struct OptionalModelRows: View {
+    let controller: OptionalModelController
+    let isOn: ReferenceWritableKeyPath<AppSettings, Bool>
+
+    @Environment(AppModel.self) private var model
+
+    private var models: any OptionalModelManaging { model.services.optionalModels }
+
+    var body: some View {
+        let enabled = model.settings[keyPath: isOn]
+        Toggle(isOn: binding) {
+            Text(controller.model.title)
+            Text(controller.model.detail)
+        }
+        if showsStatus(enabled: enabled) {
+            ModelStatusRow(
+                availability: controller.availability,
+                failure: enabled ? controller.failure : nil,
+                downloadSize: controller.model.downloadSize,
+                isRemoving: controller.isRemoving,
+                download: { controller.install(using: models) },
+                remove: {
+                    model.settings[keyPath: isOn] = false
+                    Task { await controller.remove(using: models) }
+                }
+            )
+            .transition(.opacity)
+        }
+    }
+
+    /// Nothing to say about a model that is off and not on disk. While the state is still being
+    /// read the row stays away, or it would flash "Checking" every time the pane opens.
+    private func showsStatus(enabled: Bool) -> Bool {
+        switch controller.availability {
+        case .checking: false
+        case .installed, .downloading: true
+        case .notInstalled, .unsupported: enabled
+        }
+    }
+
+    private var binding: Binding<Bool> {
+        Binding(
+            get: { model.settings[keyPath: isOn] },
+            set: { on in
+                model.settings[keyPath: isOn] = on
+                if on {
+                    controller.install(using: models)
+                } else {
+                    controller.clearFailure()
+                    Task { await controller.cancel(using: models) }
+                }
+            }
+        )
     }
 }
 
@@ -605,6 +665,55 @@ private struct PermissionRow: View {
     SettingsView()
         .environment(model)
         .environment(Updater(model: model))
+}
+
+#Preview("Transcription") {
+    @Previewable @State var model = AppModel.preview(services: .preview(optionalModels: PreviewOptionalModels()))
+    @Previewable @State var speakers = OptionalModelController(model: .speakerIdentification)
+    @Previewable @State var accuracy = OptionalModelController(model: .enhancedTranscription)
+    TranscriptionPane(speakers: speakers, accuracy: accuracy)
+        .environment(model)
+        .frame(width: 560)
+}
+
+// Speaker identification on and installed. Enhanced transcription was turned off but stays
+// installed until removed.
+#Preview("Transcription, installed") {
+    @Previewable @State var model = AppModel.preview(
+        services: .preview(optionalModels: PreviewOptionalModels(installed: [
+            .speakerIdentification: 48_200_000,
+            .enhancedTranscription: 612_400_000,
+        ]))
+    ) { $0.settings.identifySpeakers = true }
+    @Previewable @State var speakers = OptionalModelController(model: .speakerIdentification)
+    @Previewable @State var accuracy = OptionalModelController(model: .enhancedTranscription)
+    TranscriptionPane(speakers: speakers, accuracy: accuracy)
+        .environment(model)
+        .frame(width: 560)
+}
+
+#Preview("Transcription, downloading") {
+    @Previewable @State var model = AppModel.preview(
+        services: .preview(optionalModels: PreviewOptionalModels(install: .stall(at: 0.42)))
+    ) { $0.settings.enhancedTranscription = true }
+    @Previewable @State var speakers = OptionalModelController(model: .speakerIdentification)
+    @Previewable @State var accuracy = OptionalModelController(model: .enhancedTranscription)
+    TranscriptionPane(speakers: speakers, accuracy: accuracy)
+        .environment(model)
+        .frame(width: 560)
+        .task { accuracy.install(using: model.services.optionalModels) }
+}
+
+#Preview("Transcription, download failed") {
+    @Previewable @State var model = AppModel.preview(
+        services: .preview(optionalModels: PreviewOptionalModels(install: .fail("The network connection was lost.")))
+    ) { $0.settings.identifySpeakers = true }
+    @Previewable @State var speakers = OptionalModelController(model: .speakerIdentification)
+    @Previewable @State var accuracy = OptionalModelController(model: .enhancedTranscription)
+    TranscriptionPane(speakers: speakers, accuracy: accuracy)
+        .environment(model)
+        .frame(width: 560)
+        .task { speakers.install(using: model.services.optionalModels) }
 }
 
 #Preview("AI Assistants") {

@@ -132,7 +132,7 @@ private struct SourceLegend: View {
         let muted = source == .microphone && model.isMicrophoneMuted
         return HStack(spacing: 5) {
             Circle()
-                .fill(speakerColor(source == .microphone ? .me : .others))
+                .fill(speakerColor(SpeakerID(speaker: source == .microphone ? .me : .others)))
                 .frame(width: 6, height: 6)
             Image(systemName: unavailable || muted ? mutedSymbol : symbol)
                 .contentTransition(.symbolEffect(.replace))
