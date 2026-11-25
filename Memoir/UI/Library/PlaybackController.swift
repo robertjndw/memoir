@@ -28,6 +28,7 @@ final class PlaybackController {
     /// Fine enough that the transcript highlight lands within a tenth of a second of the audio.
     /// Only `currentTime` changes at this rate, and only views that read it re-render.
     private static let tickInterval = CMTime(value: 1, timescale: 10)
+    private static let endTolerance: TimeInterval = 0.1
 
     func load(url: URL, fallbackDuration: TimeInterval) {
         unload()
@@ -107,7 +108,7 @@ final class PlaybackController {
             player?.pause()
             isPlaying = false
         } else {
-            if duration > 0, currentTime >= duration - 0.1 { seek(to: 0) }
+            if duration > 0, currentTime >= duration - Self.endTolerance { seek(to: 0) }
             startPlaying()
         }
     }
@@ -132,7 +133,10 @@ final class PlaybackController {
                 if generation == self.seekGeneration { self.isSeeking = false }
             }
         }
-        if play, !isPlaying { startPlaying() }
+        // Nothing left to play, and an item sitting at its end may never report that it finished,
+        // which would leave `isPlaying` stuck on.
+        let atEnd = duration > 0 && target >= duration - Self.endTolerance
+        if play, !isPlaying, !atEnd { startPlaying() }
     }
 
     /// A failed item never seeks or ticks again, so nothing would otherwise reset this state.

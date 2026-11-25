@@ -33,6 +33,7 @@ struct LibraryView: View {
     @State private var exportDocument = MarkdownDocument(text: "")
     @State private var exportName = ""
     @State private var isExporting = false
+    @State private var exportError: String?
 
     var body: some View {
         NavigationSplitView {
@@ -85,7 +86,16 @@ struct LibraryView: View {
             document: exportDocument,
             contentType: MarkdownDocument.markdownType,
             defaultFilename: exportName
-        ) { _ in }
+        ) { result in
+            if case .failure(let error) = result, (error as? CocoaError)?.code != .userCancelled {
+                exportError = error.localizedDescription
+            }
+        }
+        .alert("Couldn't Export Meeting", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
     }
 
     // MARK: - Columns

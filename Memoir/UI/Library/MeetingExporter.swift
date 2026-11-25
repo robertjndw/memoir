@@ -1,4 +1,6 @@
+import CoreTransferable
 import Foundation
+import UniformTypeIdentifiers
 
 /// Renders a meeting as Markdown. Pure on purpose so it can be tested without a store.
 nonisolated enum MeetingExporter {
@@ -87,5 +89,20 @@ extension MeetingExporter {
             lines: meeting.sortedLines,
             completedActionItems: Set(meeting.completedActionItems)
         )
+    }
+}
+
+/// What the Share button hands to the system. The Markdown is rendered when the user picks a
+/// service, not when the toolbar is built, since that would sort and format the whole transcript
+/// on every update of the detail view.
+struct MeetingShareItem: Transferable, @unchecked Sendable {
+    let meeting: Meeting
+
+    nonisolated static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .plainText) { item in
+            // A SwiftData model may only be read on the main actor.
+            let text = await MainActor.run { MeetingExporter.markdown(for: item.meeting) }
+            return Data(text.utf8)
+        }
     }
 }

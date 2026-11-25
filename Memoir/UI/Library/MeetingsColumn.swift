@@ -30,6 +30,9 @@ struct MeetingsColumn: View {
     @Binding var selection: UUID?
     @Binding var searchText: String
     @Binding var selectedDay: Date
+    /// What the lists filter by. Trails `searchText` so typing doesn't rescan every transcript
+    /// on each keystroke.
+    @State private var query = ""
 
     var body: some View {
         // Both layouts stay inside one container so the search field and toolbar don't
@@ -37,15 +40,27 @@ struct MeetingsColumn: View {
         ZStack {
             switch layout {
             case .list:
-                MeetingListView(meetings: meetings, selection: $selection, searchText: searchText)
+                MeetingListView(meetings: meetings, selection: $selection, searchText: query)
                     .transition(.opacity)
             case .calendar:
-                CalendarPane(meetings: meetings, selection: $selection, selectedDay: $selectedDay, searchText: searchText)
+                CalendarPane(meetings: meetings, selection: $selection, selectedDay: $selectedDay, searchText: query)
                     .transition(.opacity)
             }
         }
         .searchable(text: $searchText, prompt: "Search Meetings")
         .navigationTitle("Meetings")
+        .task(id: searchText) {
+            // Clearing the field should restore the list at once, and the task is cancelled when
+            // the next key arrives.
+            if !searchText.isEmpty {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+            }
+            query = searchText
+        }
+        .onChange(of: meetings.count) {
+            MeetingGrouping.searchTexts.prune(keeping: Set(meetings.map(\.id)))
+        }
         .toolbar {
             ToolbarItem {
                 // A crossfade involves no movement, so it stays on with Reduce Motion.
