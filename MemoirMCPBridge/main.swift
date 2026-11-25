@@ -12,7 +12,6 @@ let socketPath = NSString(string: "~/Library/Application Support/Memoir Dev/mcp.
 #else
 let socketPath = NSString(string: "~/Library/Application Support/Memoir/mcp.sock").expandingTildeInPath
 #endif
-let disabledMessage = "Memoir access for AI assistants is turned off. Turn it on in Memoir Settings > AI Assistants."
 
 func log(_ message: String) {
     FileHandle.standardError.write(Data("memoir-mcp: \(message)\n".utf8))
@@ -90,8 +89,7 @@ let fallbackBundleID = "de.jandow.Memoir"
 #endif
 let appBundleID = enclosingAppURL().flatMap { Bundle(url: $0)?.bundleIdentifier } ?? fallbackBundleID
 
-func launchAppIfNeeded() {
-    guard NSRunningApplication.runningApplications(withBundleIdentifier: appBundleID).isEmpty else { return }
+func launchApp() {
     guard let appURL = enclosingAppURL()
         ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: appBundleID) else {
         log("could not locate Memoir.app")
@@ -108,47 +106,135 @@ func launchAppIfNeeded() {
     done.wait()
 }
 
-func connectWithLaunch() -> Int32? {
-    if let fd = connectToSocket() { return fd }
-    launchAppIfNeeded()
+enum Failure {
+    /// Memoir is running but serves no socket, which is what a turned-off setting looks like.
+    case settingOff
+    /// Memoir is not running, did not come up in time, or left a socket that refuses connections.
+    case unreachable
+
+    var message: String {
+        switch self {
+        case .settingOff:
+            "Memoir access for AI assistants is turned off. Turn it on in Memoir Settings > AI Assistants."
+        case .unreachable:
+            "Memoir could not be reached. If it is still starting, try again in a moment. If this keeps happening, open Memoir and check that access is turned on in Settings > AI Assistants."
+        }
+    }
+}
+
+enum Connection {
+    case connected(Int32)
+    case failed(Failure)
+}
+
+// Only touched from the main thread, before any relay thread exists.
+nonisolated(unsafe) var lastLaunch = Date.distantPast
+
+/// An app that has been running for a while and serves no socket has the setting off, so
+/// there is nothing to wait for. Only an app that is still coming up is waited for: one we
+/// launch ourselves (at most every 30 seconds, so a client that keeps asking does not pay
+/// the wait on each request) or one that was launched a moment ago.
+func connectWithLaunch() -> Connection {
+    if let fd = connectToSocket() { return .connected(fd) }
+    if let app = NSRunningApplication.runningApplications(withBundleIdentifier: appBundleID).first {
+        // Launched moments ago (at login, or by the user alongside the assistant): the socket
+        // may not exist yet, and "turned off" would be the wrong answer.
+        let justLaunched = app.launchDate.map { Date.now.timeIntervalSince($0) < 10 } ?? !app.isFinishedLaunching
+        if justLaunched {
+            for _ in 0..<30 {
+                usleep(100_000)
+                if let fd = connectToSocket() { return .connected(fd) }
+            }
+            return .failed(.unreachable)
+        }
+        return .failed(FileManager.default.fileExists(atPath: socketPath) ? .unreachable : .settingOff)
+    }
+    guard Date.now.timeIntervalSince(lastLaunch) > 30 else { return .failed(.unreachable) }
+    lastLaunch = .now
+    launchApp()
     // The app creates the socket shortly after launch, if the setting is on.
     for _ in 0..<50 {
-        if let fd = connectToSocket() { return fd }
+        if let fd = connectToSocket() { return .connected(fd) }
         usleep(100_000)
     }
-    return nil
+    // A slow launch and a turned-off setting look the same from here, so the wording stays neutral.
+    return .failed(.unreachable)
 }
 
-/// Answers every request with a JSON-RPC error until stdin closes. Notifications
-/// carry no id and must not be answered.
-func runDisabledResponder() {
-    log(disabledMessage)
-    while let line = readLine(strippingNewline: true) {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = object["id"], !(id is NSNull) else { continue }
-        let response: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": ["code": -32001, "message": disabledMessage],
-        ]
-        guard var out = try? JSONSerialization.data(withJSONObject: response, options: [.withoutEscapingSlashes]) else { continue }
-        out.append(0x0A)
-        if !writeAll(STDOUT_FILENO, out) { break }
+/// The id of a JSON-RPC request. Notifications carry none and must not be answered.
+func requestID(in line: ArraySlice<UInt8>) -> Any? {
+    guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+          let id = object["id"], !(id is NSNull) else { return nil }
+    return id
+}
+
+func writeError(id: Any, _ message: String) -> Bool {
+    let response: [String: Any] = [
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": ["code": -32001, "message": message],
+    ]
+    guard var out = try? JSONSerialization.data(withJSONObject: response, options: [.withoutEscapingSlashes]) else { return true }
+    out.append(0x0A)
+    return writeAll(STDOUT_FILENO, out)
+}
+
+/// Answers every request with a JSON-RPC error, but tries the socket again for each one:
+/// the app may only have been slow to start, or the setting may have been turned on since.
+/// Returns the connected socket once that works, with the request that found it (and
+/// everything read after it) already written to it. Returns nil when stdin closes.
+/// Reads stdin directly, since bytes buffered by `readLine` could not be handed to the socket.
+func runDisabledResponder(_ initial: Failure) -> Int32? {
+    log(initial.message)
+    var pending: [UInt8] = []
+    var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+    var atEnd = false
+    while true {
+        while true {
+            let newline = pending.firstIndex(of: 0x0A)
+            // At EOF an unterminated last line still counts, as it does for readLine.
+            if newline == nil && !(atEnd && !pending.isEmpty) { break }
+            let end = newline ?? pending.count
+            guard let id = requestID(in: pending[..<end]) else {
+                pending.removeSubrange(..<min(end + 1, pending.count))
+                continue
+            }
+            switch connectWithLaunch() {
+            case .connected(let fd):
+                if !writeAll(fd, Data(pending) + (newline == nil ? [0x0A] : [])) {
+                    close(fd)
+                    return nil
+                }
+                return fd
+            case .failed(let failure):
+                if !writeError(id: id, failure.message) { return nil }
+                pending.removeSubrange(..<min(end + 1, pending.count))
+            }
+        }
+        if atEnd { return nil }
+        let n = read(STDIN_FILENO, &chunk, chunk.count)
+        if n < 0 && errno == EINTR { continue }
+        if n <= 0 { atEnd = true; continue }
+        pending.append(contentsOf: chunk[0..<n])
     }
 }
 
-guard let sock = connectWithLaunch() else {
-    runDisabledResponder()
-    exit(0)
+let sock: Int32
+switch connectWithLaunch() {
+case .connected(let fd):
+    sock = fd
+case .failed(let failure):
+    guard let fd = runDisabledResponder(failure) else { exit(0) }
+    sock = fd
 }
 
 // Stdin closing only half-closes the socket: replies to requests already sent must
 // still reach stdout, and the app closes its side once it has answered them.
 // The socket closing ends the bridge right away, since nobody is left to answer.
+let relayed = sock
 Thread.detachNewThread {
-    pump(from: STDIN_FILENO, to: sock)
-    shutdown(sock, SHUT_WR)
+    pump(from: STDIN_FILENO, to: relayed)
+    shutdown(relayed, SHUT_WR)
 }
-pump(from: sock, to: STDOUT_FILENO)
+pump(from: relayed, to: STDOUT_FILENO)
 exit(0)

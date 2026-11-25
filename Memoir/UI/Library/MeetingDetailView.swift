@@ -9,6 +9,9 @@ struct MeetingDetailView: View {
     @State private var playback = PlaybackController()
     @State private var tab: Tab
     @State private var titleDraft = ""
+    /// The title `titleDraft` was last in step with. A draft that differs from it was typed by the
+    /// user, which is the only case worth committing.
+    @State private var titleBaseline = ""
     @State private var findRequested = false
     @FocusState private var titleFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -32,6 +35,7 @@ struct MeetingDetailView: View {
     init(meeting: Meeting, initialTab: Tab? = nil) {
         self.meeting = meeting
         _titleDraft = State(initialValue: meeting.title)
+        _titleBaseline = State(initialValue: meeting.title)
         // Decided here rather than in `.task` so the first frame already shows the right tab.
         // The environment isn't readable yet, so the persisted status stands in for
         // `model.recordingMeetingID`; interrupted recordings are reset to ready at launch.
@@ -39,6 +43,12 @@ struct MeetingDetailView: View {
     }
 
     private var isRecording: Bool { model.recordingMeetingID == meeting.id }
+
+    private struct PlayerKey: Hashable {
+        var id: UUID
+        var hasAudio: Bool
+        var isRecording: Bool
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,16 +67,18 @@ struct MeetingDetailView: View {
         // player instead of ending at a hard line.
         .safeAreaBar(edge: .bottom, spacing: 0) {
             // The chat has its own composer at the bottom edge, and two stacked bars crowd it.
-            if meeting.audioURL != nil, !isRecording, tab != .chat {
+            // Audio that was started from a citation keeps its controls, or it could not be paused.
+            if meeting.audioURL != nil, !isRecording, tab != .chat || playback.isPlaying {
                 MeetingPlaybackBar(meeting: meeting, playback: playback)
                     .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.15), value: tab == .chat)
+        .animation(.easeInOut(duration: 0.15), value: playback.isPlaying)
         .toolbar { toolbar }
         .focusedSceneValue(\.focusedMeeting, FocusedMeeting(
             meeting: meeting,
-            isRecording: isRecording,
+            isActive: model.activeMeetingID == meeting.id,
             commands: commands,
             tab: $tab,
             rename: { titleFocused = true },
@@ -76,18 +88,20 @@ struct MeetingDetailView: View {
             }
         ))
         .navigationTitle(meeting.title)
-        .task(id: meeting.id) {
+        .task(id: PlayerKey(id: meeting.id, hasAudio: meeting.hasAudio, isRecording: isRecording)) {
+            // `isRecording` turns false before the mixdown is done, so the file only becomes
+            // playable when `hasAudio` flips, which is why that is part of the key.
             if let url = meeting.audioURL, !isRecording {
                 playback.load(url: url, fallbackDuration: meeting.duration)
             }
         }
         .onChange(of: meeting.title) { _, title in
-            if !titleFocused { titleDraft = title }
-        }
-        .onChange(of: isRecording) { _, recording in
-            // The file only becomes playable once the recording has finished.
-            guard !recording, let url = meeting.audioURL else { return }
-            playback.load(url: url, fallbackDuration: meeting.duration)
+            // An untouched draft follows the title even while focused, or leaving the field
+            // would write the old title back over a generated one.
+            if !titleFocused || titleDraft == titleBaseline {
+                titleDraft = title
+                titleBaseline = title
+            }
         }
         .onDisappear { playback.unload() }
     }
@@ -108,6 +122,7 @@ struct MeetingDetailView: View {
                     // Escape puts the old title back, as when renaming in Finder.
                     .onExitCommand {
                         titleDraft = meeting.title
+                        titleBaseline = meeting.title
                         titleFocused = false
                     }
                     .onChange(of: titleFocused) { _, focused in
@@ -159,8 +174,11 @@ struct MeetingDetailView: View {
     }
 
     private func commitTitle() {
-        model.rename(meeting, to: titleDraft)
+        if titleDraft != titleBaseline {
+            model.rename(meeting, to: titleDraft)
+        }
         titleDraft = meeting.title
+        titleBaseline = meeting.title
     }
 
     // MARK: - Content
@@ -198,7 +216,7 @@ struct MeetingDetailView: View {
         // holds the keyboard shortcuts.
         ToolbarItemGroup {
             ShareLink(
-                item: MeetingExporter.markdown(for: meeting),
+                item: MeetingShareItem(meeting: meeting),
                 subject: Text(meeting.title),
                 preview: SharePreview(meeting.title)
             )
@@ -210,7 +228,7 @@ struct MeetingDetailView: View {
                 Button("Reveal in Finder", systemImage: "folder") { commands.reveal(meeting) }
                 Divider()
                 Button("Delete Meeting…", systemImage: "trash", role: .destructive) { commands.delete(meeting) }
-                    .disabled(isRecording)
+                    .disabled(model.activeMeetingID == meeting.id)
             } label: {
                 Label("More", systemImage: "ellipsis")
             }

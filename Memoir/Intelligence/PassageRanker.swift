@@ -38,11 +38,17 @@ nonisolated enum PassageRanker {
     /// Fraction (0...1) of the query's IDF mass that the passage covers. Terms match exactly or
     /// by a shared prefix of at least five characters, a cheap stand-in for stemming that
     /// works across the languages the speech engine supports ("deploy" vs "deployment").
-    static func keywordScore(query: [String], passage: [String], idf: [String: Double]) -> Double {
+    static func keywordScore(
+        query: [String],
+        passage: [String],
+        idf: [String: Double],
+        fallbackWeight: Double? = nil
+    ) -> Double {
         let queryTerms = Set(query)
         guard !queryTerms.isEmpty else { return 0 }
         let passageTerms = Set(passage)
-        let fallbackWeight = idf.values.max() ?? 1
+        // Callers scoring many passages pass this in; scanning the vocabulary per passage adds up.
+        let fallbackWeight = fallbackWeight ?? idf.values.max() ?? 1
         var matched = 0.0
         var total = 0.0
         for term in queryTerms {
@@ -91,9 +97,10 @@ nonisolated enum PassageRanker {
         let queryTerms = terms(query)
         let passageTerms = passages.map(terms)
         let idf = inverseDocumentFrequency(passageTerms)
+        let fallbackWeight = idf.values.max() ?? 1
         let useVectors = queryVector != nil && passageVectors.count == passages.count
         let hits = passages.indices.map { index in
-            let keyword = keywordScore(query: queryTerms, passage: passageTerms[index], idf: idf)
+            let keyword = keywordScore(query: queryTerms, passage: passageTerms[index], idf: idf, fallbackWeight: fallbackWeight)
             var semantic: Double?
             if useVectors, let queryVector, let vector = passageVectors[index] {
                 semantic = cosine(queryVector, vector)

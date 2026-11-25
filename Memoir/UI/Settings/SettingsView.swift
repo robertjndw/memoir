@@ -223,10 +223,11 @@ private struct DetectionPane: View {
                     CalendarAccessRow(permissions: permissions)
                 }
                 toggle(
-                    "The camera turns on",
-                    detail: "A camera in use often means a video call.",
+                    "Count browser calls when the camera is on",
+                    detail: "A browser using the microphone and camera is treated as a video call. Needs the microphone option.",
                     isOn: $settings.detectCamera
                 )
+                .disabled(!settings.detectMicrophoneApps)
             }
 
             Section {

@@ -3,7 +3,8 @@ import SwiftUI
 /// The meeting in the key window, published by `MeetingDetailView` for the menu commands.
 struct FocusedMeeting {
     let meeting: Meeting
-    let isRecording: Bool
+    /// Being recorded or still being saved, so it cannot be deleted.
+    let isActive: Bool
     let commands: MeetingCommands
     let tab: Binding<MeetingDetailView.Tab>
     /// Focuses the title field. Titles are edited inline, not in a sheet.
@@ -56,7 +57,7 @@ struct MeetingMenuCommands: Commands {
             Button("Delete Meeting…") {
                 if let focused { focused.commands.delete(focused.meeting) }
             }
-            .disabled(focused == nil || focused?.isRecording == true)
+            .disabled(focused == nil || focused?.isActive == true)
         }
     }
 }

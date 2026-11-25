@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Speech
+import Synchronization
 import Testing
 @testable import Memoir
 
@@ -70,6 +71,106 @@ struct TranscriptionUnitTests {
         await gate.open(ready: true)
         #expect(await waiter == false)
         #expect(await gate.wait() == false)
+    }
+
+    @Test func backlogKeepsTheNewestAudio() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        var backlog = CaptureBacklog(limit: 3)
+        var drops: [Int] = []
+        for index in 0..<10 where backlog.append(Self.tone(format: format, frames: 16_000, time: Double(index))) {
+            drops.append(index)
+        }
+        #expect(drops == Array(3..<10))
+        #expect(backlog.count == 3)
+        #expect(abs(backlog.duration - 3) < 0.001)
+        let kept = backlog.removeAll()
+        #expect(kept.map(\.time) == [7, 8, 9])
+        #expect(backlog.count == 0 && backlog.duration == 0)
+    }
+
+    @Test func backlogKeepsAChunkLongerThanTheLimit() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        var backlog = CaptureBacklog(limit: 1)
+        let droppedFirst = backlog.append(Self.tone(format: format, frames: 32_000, time: 0))
+        let droppedSecond = backlog.append(Self.tone(format: format, frames: 32_000, time: 2))
+        #expect(!droppedFirst && droppedSecond)
+        let kept = backlog.removeAll()
+        #expect(kept.map(\.time) == [2])
+    }
+
+    /// Dropping the oldest audio must not shift what is left: the analyzer starts at the first
+    /// kept chunk's recording time, with no silence before it and no gap after it.
+    @Test func timelineStartsAtTheFirstKeptChunkAfterDropping() throws {
+        let analyzerFormat = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true))
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        // 1.55 rather than 1.5 keeps the expectation clear of floating point sums.
+        var backlog = CaptureBacklog(limit: 1.55)
+        for index in 0..<20 {
+            _ = backlog.append(Self.tone(format: format, frames: 1600, time: Double(index) * 0.1))
+        }
+        let kept = backlog.removeAll()
+        #expect(kept.count == 15)
+
+        let feed = AnalyzerFeed(analyzerFormat: analyzerFormat)
+        let inputs = kept.flatMap { feed.inputs(for: $0) } + feed.inputs(for: Self.tone(format: format, frames: 1600, time: 2))
+        let starts = try inputs.map { try #require($0.bufferStartTime).seconds }
+        #expect(abs(try #require(starts.first) - 0.5) < 0.0001)
+        #expect(abs(try #require(starts.last) - 2) < 0.0001)
+        var previousEnd = 0.5
+        for (input, start) in zip(inputs, starts) {
+            #expect(abs(start - previousEnd) < 0.0001)
+            previousEnd = start + Double(input.buffer.frameLength) / 16_000
+        }
+    }
+
+    @Test func bufferingHoldsTheNewestAudioUntilTheModelIsReady() async throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        let gate = ModelGate()
+        let (input, capture) = AsyncStream.makeStream(of: CapturedAudio.self)
+        let (drops, dropped) = AsyncStream.makeStream(of: Void.self)
+        let output = SpeechTranscriptionPipeline.buffered(input, until: gate, limit: 3) { dropped.yield() }
+
+        for index in 0..<4 {
+            capture.yield(Self.tone(format: format, frames: 16_000, time: Double(index)))
+        }
+        // The fourth second overflows the backlog. Waiting for that makes sure the gate opens
+        // only after the first four chunks were buffered.
+        var dropIterator = drops.makeAsyncIterator()
+        _ = await dropIterator.next()
+        await gate.open(ready: true)
+        capture.yield(Self.tone(format: format, frames: 16_000, time: 4))
+        capture.finish()
+
+        var times: [TimeInterval] = []
+        for await chunk in output { times.append(chunk.time) }
+        #expect(times == [1, 2, 3, 4])
+    }
+
+    @Test func bufferingDiscardsOnceTheModelIsUnavailable() async throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        let gate = ModelGate()
+        await gate.open(ready: false)
+        let (input, capture) = AsyncStream.makeStream(of: CapturedAudio.self)
+        let output = SpeechTranscriptionPipeline.buffered(input, until: gate, limit: 3) {}
+        for index in 0..<5 {
+            capture.yield(Self.tone(format: format, frames: 16_000, time: Double(index)))
+        }
+        capture.finish()
+        var count = 0
+        for await _ in output { count += 1 }
+        #expect(count == 0)
+    }
+
+    @Test func issuesAreReportedOnce() {
+        let sent = Mutex<[RecordingIssue]>([])
+        let reporter = IssueReporter { issue in sent.withLock { $0.append(issue) } }
+        for _ in 0..<3 {
+            reporter.report(.liveTranscriptIncomplete)
+            reporter.report(.transcriptionStopped(.me))
+        }
+        reporter.report(.transcriptionStopped(.others))
+        #expect(sent.withLock { $0 } == [.liveTranscriptIncomplete, .transcriptionStopped(.me), .transcriptionStopped(.others)])
     }
 
     @Test func finishWithoutStartReturns() async {
@@ -244,16 +345,21 @@ nonisolated enum TranscriptionFixture {
         let audioDuration = (microphone + system).map { $0.time + Double($0.buffer.frameLength) / $0.buffer.format.sampleRate }.max() ?? 0
         let clock = ContinuousClock()
         let began = clock.now
-        let updates = try await pipeline.start(
+        let events = try await pipeline.start(
             streams: streams(microphone: microphone, system: system, pace: pace),
             locale: locale,
             contextualStrings: ["Memoir"]
         )
         let collector = Task {
             var collected: [(TranscriptUpdate, Duration)] = []
-            for await update in updates {
-                collected.append((update, clock.now - began))
+            var issues: [RecordingIssue] = []
+            for await event in events {
+                switch event {
+                case .update(let update): collected.append((update, clock.now - began))
+                case .issue(let issue): issues.append(issue)
+                }
             }
+            #expect(issues.isEmpty)
             return collected
         }
         if pace > 0 {

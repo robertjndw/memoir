@@ -280,6 +280,30 @@ struct DetectionPolicyTests {
         #expect(h.emitted.count == 1)
     }
 
+    @Test func eventStartDuringAnOfferedCallStaysQuietAfterTheCallEnds() {
+        var h = Harness()
+        h.hold(zoom)
+        h.run(30)
+        h.signals.currentEvent = h.event(startsIn: 60)
+        h.run(120)
+        h.release()
+        h.run(300)
+        #expect(h.emitted.count == 1)
+        #expect(h.emitted.first?.event == nil)
+    }
+
+    @Test func eventStartDuringADismissedCallStaysQuietAfterTheCallEnds() throws {
+        var h = Harness()
+        h.hold(zoom)
+        let first = try #require(h.run(10).first)
+        h.dismiss(first)
+        h.signals.currentEvent = h.event(startsIn: 60)
+        h.run(120)
+        h.release()
+        h.run(300)
+        #expect(h.emitted.count == 1)
+    }
+
     @Test func callJoinedAfterAnIgnoredEventHintIsOfferedWithTheEvent() {
         var h = Harness()
         let event = h.event(startsIn: 0)
@@ -427,6 +451,26 @@ struct DetectionPolicyTests {
         #expect(stop.bundleID == "us.zoom.xos")
         #expect(stop.appName == "Zoom")
         #expect(h.run(600).isEmpty)
+    }
+
+    @Test func briefMicrophoneUseDuringRecordingDoesNotSuggestStopping() {
+        var h = Harness()
+        h.setRecording(true)
+        h.hold(teams)
+        h.run(2)
+        h.release()
+        h.run(600)
+        #expect(h.emitted.isEmpty)
+    }
+
+    @Test func appJoiningTheMicrophoneDuringRecordingCountsAfterDebounce() {
+        var h = Harness()
+        h.setRecording(true)
+        h.hold(zoom)
+        h.run(h.timing.micDebounce)
+        h.release()
+        h.run(h.timing.stopGrace)
+        #expect(h.emitted.map(\.kind) == [.stop])
     }
 
     @Test func briefReleaseDuringRecordingDoesNotSuggestStopping() {

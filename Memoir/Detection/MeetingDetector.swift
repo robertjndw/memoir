@@ -5,7 +5,8 @@ import Foundation
 /// Idle cost: Core Audio and CoreMediaIO notify on change, so nothing runs until something
 /// happens. The only timers are a wake-up for the policy's own deadlines, a 2 s poll while a
 /// meeting app or browser is running audio (see `AudioProcessMonitor`), and a 30 s calendar
-/// check while calendar detection is on, which is served from `EventKitCalendar`'s cache.
+/// check while calendar detection is on, which is served from `EventKitCalendar`'s cache
+/// (every 10 s instead while calendar access is still missing, to notice a grant).
 final class MeetingDetector: MeetingDetecting {
     let suggestions: AsyncStream<MeetingSuggestion>
 
@@ -20,6 +21,7 @@ final class MeetingDetector: MeetingDetecting {
 
     private static let pollInterval: TimeInterval = 2
     private static let calendarInterval: TimeInterval = 30
+    private static let accessCheckInterval: TimeInterval = 10
 
     init(calendar: any CalendarProviding) {
         self.calendar = calendar
@@ -45,7 +47,9 @@ final class MeetingDetector: MeetingDetecting {
         guard isStarted else { return }
         // Turning a signal off also removes its listeners, so it costs nothing at all.
         if options.microphoneApps { audio.start() } else { audio.stop() }
-        if options.camera { camera.start() } else { camera.stop() }
+        // The camera only corroborates a browser holding the microphone, so on its own it
+        // has no effect and its listeners would be wasted.
+        if options.camera && options.microphoneApps { camera.start() } else { camera.stop() }
         evaluate()
     }
 
@@ -95,8 +99,10 @@ final class MeetingDetector: MeetingDetecting {
         if audio.needsPolling {
             consider(now + Self.pollInterval)
         }
-        if policy.options.calendar && calendar.hasAccess {
-            consider(now + Self.calendarInterval)
+        if policy.options.calendar {
+            // Nothing tells the detector when access is granted, in Memoir or in System
+            // Settings, so keep looking until it is.
+            consider(now + (calendar.hasAccess ? Self.calendarInterval : Self.accessCheckInterval))
         }
 
         wakeTask?.cancel()

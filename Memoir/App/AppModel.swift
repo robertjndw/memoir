@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import SwiftData
+import os
 
 /// Root state of the app: owns the recording lifecycle and connects the engines to the store.
 @Observable
@@ -10,7 +11,20 @@ final class AppModel {
         case idle
         case starting
         case recording(UUID)
-        case finishing
+        /// Stopped, but the audio is still being mixed into the meeting's folder and late
+        /// transcript lines are still arriving.
+        case finishing(UUID)
+    }
+
+    /// How `finishRecording` left things, for callers that report back to the user.
+    enum FinishOutcome: Equatable {
+        case saved(UUID)
+        /// Kept, but without an audio file. `errorMessage` says why if it was a failure.
+        case savedWithoutAudio(UUID)
+        /// The start failed, so there was nothing to save. `errorMessage` says why.
+        case notStarted
+        /// Still waiting for the start, typically on a permission prompt.
+        case stillStarting
     }
 
     struct SummaryActivity: Equatable {
@@ -69,6 +83,11 @@ final class AppModel {
     @ObservationIgnored private var transcriber: (any Transcribing)?
     @ObservationIgnored private var levelsTask: Task<Void, Never>?
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
+    /// Starting the transcriber and wiring its updates to the meeting. The stop waits for it,
+    /// so a stop that lands while it is still running cannot finish ahead of the transcript.
+    @ObservationIgnored private var transcriberStartTask: Task<Void, Never>?
+    /// The stop in flight, so `finishRecording` can wait for it instead of polling.
+    @ObservationIgnored private var stopTask: Task<Void, Never>?
     /// Recording time the current mute began. Only closed ranges are stored on the meeting.
     @ObservationIgnored private var mutedSince: TimeInterval?
     @ObservationIgnored private var isChangingMute = false
@@ -89,8 +108,18 @@ final class AppModel {
         if case .recording = recordingState { true } else { false }
     }
 
+    /// The meeting being recorded live. Nil again as soon as it is stopped.
     var recordingMeetingID: UUID? {
         if case .recording(let id) = recordingState { id } else { nil }
+    }
+
+    /// The meeting being recorded or saved. Its folder and transcript are still being written,
+    /// so it must not be deleted or retranscribed.
+    var activeMeetingID: UUID? {
+        switch recordingState {
+        case .recording(let id), .finishing(let id): id
+        case .idle, .starting: nil
+        }
     }
 
     // MARK: - Lifecycle
@@ -98,6 +127,7 @@ final class AppModel {
     /// Called once at launch. Not part of init so previews and tests stay passive.
     func activate() {
         closeInterruptedRecordings()
+        backgroundTasks.append(Task { [weak self] in await self?.recoverAudio() })
         refresh()
 
         settings.detectionChanged = { [weak self] in
@@ -148,6 +178,36 @@ final class AppModel {
                 meeting.duration = max(meeting.duration, last)
             }
         }
+        try? context.save()
+    }
+
+    /// Gives meetings whose recording never got its final file their audio back from the part
+    /// files: ones interrupted by a crash or quit, and ones whose mixdown failed at stop.
+    ///
+    /// Safe to run again after an interruption: the mixdown only puts `audio.m4a` in place once
+    /// it is complete, and the parts are removed only after that, so a later run either adopts
+    /// the finished file or mixes the parts again.
+    func recoverAudio() async {
+        let descriptor = FetchDescriptor<Meeting>(predicate: #Predicate { !$0.hasAudio })
+        let ids = ((try? context.fetch(descriptor)) ?? []).map(\.id)
+        for id in ids where !Task.isCancelled {
+            // A recording started meanwhile is writing parts into its folder right now.
+            guard id != activeMeetingID else { continue }
+            let duration: TimeInterval?
+            do {
+                duration = try await RecordingRecovery.recover(folder: RecordingFiles.folder(for: id))
+            } catch {
+                // The parts stay for the next launch. An alert at every launch about a file that
+                // will not mix would not help the user.
+                RecordingRecovery.log.error("Recovering \(id, privacy: .public) failed: \(error)")
+                continue
+            }
+            // Checked again: the meeting may have been deleted or started recording meanwhile.
+            guard let duration, id != activeMeetingID, let meeting = meeting(with: id) else { continue }
+            meeting.hasAudio = true
+            meeting.duration = duration
+            try? context.save()
+        }
     }
 
     // MARK: - Recording
@@ -195,6 +255,9 @@ final class AppModel {
         }
 
         context.insert(meeting)
+        // Autosave can be seconds away. A crash before it would leave the folder and its part
+        // files with no meeting to recover them into.
+        try? context.save()
         self.recorder = recorder
         unavailableSources = streams.unavailable
         // Never carried over: a mute left on from the last call would silently lose the
@@ -213,50 +276,79 @@ final class AppModel {
                 self?.levels = levels
             }
         }
+        // Ends by itself: the recorder finishes the stream when it stops.
+        Task { [weak self] in
+            for await issue in streams.issues {
+                self?.errorMessage = issue.message
+            }
+        }
 
         // A recording without a transcript is still worth keeping (it can be transcribed from
         // the file later), so a transcription failure does not abort the recording.
+        //
+        // The wiring happens inside the task rather than after awaiting it here: a stop that
+        // waits for the same task has to find the transcriber and its updates in place when it
+        // resumes, and the order in which two waiters resume is not defined.
         let transcriber = services.makeTranscriber()
-        do {
-            let updates = try await transcriber.start(
-                streams: streams,
-                locale: locale,
-                contextualStrings: meeting.attendees + (event.map { [$0.title] } ?? [])
-            )
-            // Stopped while the transcriber was still starting: `stopRecording` could not finish
-            // it then, so do it here instead of attaching updates to a saved meeting.
-            guard recordingState == .recording(meeting.id) else {
-                await transcriber.finish()
-                return
-            }
-            self.transcriber = transcriber
-            updatesTask = Task { [weak self] in
-                for await update in updates {
-                    self?.apply(update, to: meeting)
+        let contextualStrings = meeting.attendees + (event.map { [$0.title] } ?? [])
+        let startTask = Task { [weak self] in
+            do {
+                let updates = try await transcriber.start(
+                    streams: streams,
+                    locale: locale,
+                    contextualStrings: contextualStrings
+                )
+                guard let self else { return }
+                self.transcriber = transcriber
+                updatesTask = Task { [weak self] in
+                    for await event in updates {
+                        switch event {
+                        case .update(let update): self?.apply(update, to: meeting)
+                        case .issue(let issue): self?.errorMessage = issue.message
+                        }
+                    }
                 }
+            } catch {
+                self?.errorMessage = "Live transcription is unavailable: \(error.localizedDescription)"
             }
-        } catch {
-            errorMessage = "Live transcription is unavailable: \(error.localizedDescription)"
         }
+        transcriberStartTask = startTask
+        await startTask.value
     }
 
     func stopRecording() async {
         guard case .recording(let meetingID) = recordingState, let recorder else { return }
-        recordingState = .finishing
+        recordingState = .finishing(meetingID)
         services.hints.hide()
+        // A task of its own so `finishRecording` can wait for a stop that someone else began.
+        let task = Task { await finish(meetingID, recorder: recorder) }
+        stopTask = task
+        await task.value
+    }
 
+    private func finish(_ meetingID: UUID, recorder: any AudioRecording) async {
         let output = await recorder.stop()
+        let elapsed = recordingStartDate.map { Date.now.timeIntervalSince($0) } ?? 0
+        // The recorder only leaves parts behind when the mixdown failed.
+        let mixdownFailed = output.audioURL == nil
+            && RecordingRecovery.hasParts(in: RecordingFiles.folder(for: meetingID))
+        // Saved before waiting on the transcriber, which can take a while when the speech model
+        // is still downloading. A quit or crash during that wait keeps the audio.
+        if let meeting = meeting(with: meetingID) {
+            // The mix can be shorter than the meeting (or missing); never report less than
+            // the time that actually passed.
+            meeting.duration = output.audioURL == nil ? max(output.duration, elapsed) : output.duration
+            meeting.hasAudio = output.audioURL != nil
+            try? context.save()
+        }
+
+        await transcriberStartTask?.value
         await transcriber?.finish()
         // The update stream ends after the last final result, so this drains everything.
         await updatesTask?.value
         levelsTask?.cancel()
 
         if let meeting = meeting(with: meetingID) {
-            // The mix can be shorter than the meeting (or missing); never report less than
-            // the time that actually passed.
-            let elapsed = recordingStartDate.map { Date.now.timeIntervalSince($0) } ?? 0
-            meeting.duration = output.audioURL == nil ? max(output.duration, elapsed) : output.duration
-            meeting.hasAudio = output.audioURL != nil
             closeMutedRange(at: meeting.duration, in: meeting)
             meeting.status = .ready
             try? context.save()
@@ -266,9 +358,15 @@ final class AppModel {
                 Task { await summarize(meeting) }
             }
         }
+        // Set last so it is not replaced by a transcription error reported during the drain.
+        if mixdownFailed {
+            errorMessage = String(localized: "Memoir could not save the audio of this recording. It will try again the next time it opens.")
+        }
 
         self.recorder = nil
         transcriber = nil
+        transcriberStartTask = nil
+        stopTask = nil
         levelsTask = nil
         updatesTask = nil
         recordingStartDate = nil
@@ -283,18 +381,29 @@ final class AppModel {
     /// Brings a recording that is starting, running or being saved to a finished file. Unlike
     /// `stopRecording` it also waits out the transitional states, which is what quitting and
     /// the Stop shortcut need.
-    func finishRecording() async {
+    @discardableResult
+    func finishRecording() async -> FinishOutcome {
         // A start can sit behind a permission prompt for as long as the user likes. Quitting
-        // should not wait on that forever.
+        // should not wait on that forever. A stop is different: it ends on its own, and giving
+        // up on it would lose the audio mix and the transcript tail.
         let deadline = Date.now.addingTimeInterval(15)
-        while recordingState != .idle, Date.now < deadline {
-            if isRecording {
-                await stopRecording()
-            } else {
-                try? await Task.sleep(for: .milliseconds(50))
-            }
+        while recordingState == .starting, Date.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let meetingID = activeMeetingID
+        switch recordingState {
+        case .recording:
+            await stopRecording()
+        case .finishing:
+            await stopTask?.value
+        case .starting:
+            return .stillStarting
+        case .idle:
+            break
         }
         try? context.save()
+        guard let meetingID, let meeting = meeting(with: meetingID) else { return .notStarted }
+        return meeting.hasAudio ? .saved(meetingID) : .savedWithoutAudio(meetingID)
     }
 
     func toggleMicrophoneMuted() async {
@@ -336,6 +445,8 @@ final class AppModel {
     }
 
     private func apply(_ update: TranscriptUpdate, to meeting: Meeting) {
+        // Deleted while late lines were still arriving. Attaching a segment to it would trap.
+        guard isStored(meeting) else { return }
         guard update.isFinal else {
             volatileText[update.speaker] = update.text
             return
@@ -444,7 +555,7 @@ final class AppModel {
     /// Replaces the transcript with one made from the saved audio file.
     func retranscribe(_ meeting: Meeting) async {
         let id = meeting.id
-        guard let url = meeting.audioURL, !retranscribing.contains(id), recordingMeetingID != id else { return }
+        guard let url = meeting.audioURL, !retranscribing.contains(id), activeMeetingID != id else { return }
         retranscribing.insert(id)
         transcriptionErrors[id] = nil
         defer { retranscribing.remove(id) }
@@ -483,6 +594,7 @@ final class AppModel {
     /// Chat sessions index the store when they are created and would keep answering from
     /// the old transcript or summary.
     private func contentChanged(in meetingID: UUID) {
+        mcpServer.libraryChanged()
         chats[.library]?.invalidateSession()
         chats[.meeting(meetingID)]?.invalidateSession()
     }
@@ -506,6 +618,7 @@ final class AppModel {
         guard !title.isEmpty, title != meeting.title else { return }
         meeting.title = title
         meeting.hasCustomTitle = true
+        contentChanged(in: meeting.id)
     }
 
     func toggleActionItem(_ task: String, in meeting: Meeting) {
@@ -517,7 +630,7 @@ final class AppModel {
     }
 
     func delete(_ meeting: Meeting) {
-        guard recordingMeetingID != meeting.id else { return }
+        guard activeMeetingID != meeting.id else { return }
         let id = meeting.id
         chats[.meeting(id)]?.stop()
         chats[.meeting(id)] = nil
@@ -528,6 +641,7 @@ final class AppModel {
         if lastRecording?.meetingID == id { lastRecording = nil }
         context.delete(meeting)
         try? context.save()
+        mcpServer.libraryChanged()
         try? FileManager.default.removeItem(at: RecordingFiles.folder(for: id))
     }
 

@@ -102,4 +102,125 @@ struct LibraryLogicTests {
         #expect(MeetingGrouping.matches(meeting, query: ""))
         #expect(!MeetingGrouping.matches(meeting, query: "zebra"))
     }
+
+    @Test func searchCacheFollowsContentChanges() {
+        let meeting = Meeting(title: "Roadmap")
+        meeting.segments = [TranscriptSegment(line: line(.me, 0, "first topic"))]
+        #expect(MeetingGrouping.matches(meeting, query: "topic"))
+        #expect(!MeetingGrouping.matches(meeting, query: "budget"))
+
+        meeting.segments.append(TranscriptSegment(line: line(.others, 5, "the budget")))
+        #expect(MeetingGrouping.matches(meeting, query: "budget"))
+
+        meeting.title = "Offsite"
+        meeting.attendees = ["Ana Ortiz"]
+        meeting.summary = MeetingSummary(overview: "Hiring plan")
+        #expect(MeetingGrouping.matches(meeting, query: "offsite"))
+        #expect(MeetingGrouping.matches(meeting, query: "ortiz"))
+        #expect(MeetingGrouping.matches(meeting, query: "hiring"))
+        #expect(!MeetingGrouping.matches(meeting, query: "roadmap"))
+    }
+
+    @Test func searchDoesNotMatchAcrossFields() {
+        let meeting = Meeting(title: "Road")
+        meeting.segments = [TranscriptSegment(line: line(.me, 0, "map"))]
+        #expect(!MeetingGrouping.matches(meeting, query: "roadmap"))
+        #expect(!MeetingGrouping.matches(meeting, query: "road map"))
+    }
+
+    @Test func optionalLengthHidesZero() {
+        let en = Locale(identifier: "en_US")
+        #expect(LibraryFormat.optionalLength(0, locale: en) == nil)
+        #expect(LibraryFormat.optionalLength(0.2, locale: en) == nil)
+        #expect(LibraryFormat.optionalLength(-5, locale: en) == nil)
+        #expect(LibraryFormat.optionalLength(65, locale: en) == LibraryFormat.length(65, locale: en))
+        // A 65 minute meeting must not read like 65 seconds.
+        #expect(LibraryFormat.optionalLength(65 * 60, locale: en) != LibraryFormat.optionalLength(65, locale: en))
+    }
+
+    #if DEBUG
+    @Test func seekingToTheEndDoesNotStartPlayback() {
+        let playback = PlaybackController.preview(at: 0, of: 60)
+        playback.seek(to: 60, play: true)
+        #expect(!playback.isPlaying)
+        #expect(playback.currentTime == 60)
+        playback.seek(to: 500, play: true)
+        #expect(!playback.isPlaying)
+        #expect(playback.currentTime == 60)
+        playback.seek(to: 30, play: true)
+        #expect(playback.isPlaying)
+        playback.unload()
+    }
+    #endif
+}
+
+/// Reports whatever it was told and finishes a download only when the test says so.
+private final class FakeSpeechModels: SpeechModelManaging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var statuses: [String: SpeechModelStatus]
+    private var continuation: AsyncThrowingStream<Double, Error>.Continuation?
+
+    init(statuses: [String: SpeechModelStatus]) { self.statuses = statuses }
+
+    func supportedLocales() async -> [Locale] { [] }
+
+    func status(for locale: Locale) async -> SpeechModelStatus {
+        lock.withLock { statuses[locale.identifier] ?? .notInstalled }
+    }
+
+    func install(locale: Locale) -> AsyncThrowingStream<Double, Error> {
+        AsyncThrowingStream { continuation in
+            lock.withLock { self.continuation = continuation }
+        }
+    }
+
+    /// The controller starts the install from a task, so it may not have begun yet.
+    func finishDownload() async {
+        for _ in 0..<200 {
+            if let continuation = lock.withLock({ continuation }) {
+                continuation.finish()
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+}
+
+struct SpeechModelControllerTests {
+    private let english = Locale(identifier: "en_US")
+    private let german = Locale(identifier: "de_DE")
+
+    private func waitUntilIdle(_ controller: SpeechModelController) async {
+        for _ in 0..<200 where controller.isDownloading { try? await Task.sleep(for: .milliseconds(10)) }
+        // The status is re-read after the download task is cleared.
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+
+    @Test func finishedDownloadDoesNotMarkOtherLocaleInstalled() async {
+        let models = FakeSpeechModels(statuses: ["en_US": .notInstalled, "de_DE": .notInstalled])
+        let controller = SpeechModelController()
+        controller.download(locale: english, using: models)
+        #expect(controller.status == .downloading)
+
+        await controller.refresh(locale: german, using: models)
+        #expect(controller.status == .notInstalled)
+        #expect(controller.progress == nil)
+
+        await models.finishDownload()
+        await waitUntilIdle(controller)
+        #expect(!controller.isDownloading)
+        #expect(controller.status == .notInstalled)
+    }
+
+    @Test func finishedDownloadMarksSelectedLocaleInstalled() async {
+        let models = FakeSpeechModels(statuses: ["en_US": .notInstalled])
+        let controller = SpeechModelController()
+        controller.download(locale: english, using: models)
+        await controller.refresh(locale: english, using: models)
+        #expect(controller.status == .downloading)
+
+        await models.finishDownload()
+        await waitUntilIdle(controller)
+        #expect(controller.status == .installed)
+    }
 }

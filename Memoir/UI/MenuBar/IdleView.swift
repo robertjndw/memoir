@@ -282,6 +282,18 @@ struct AskMemoirRow: View {
     }
 
     private var field: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            fieldRow
+            if isBusy {
+                Text("Memoir is still answering. Ask again in a moment.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 12)
+            }
+        }
+    }
+
+    private var fieldRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles")
                 .foregroundStyle(IntelligencePalette.linear)
@@ -313,8 +325,12 @@ struct AskMemoirRow: View {
         }
     }
 
+    /// The chat takes one question at a time and drops any other. The question stays in the
+    /// field until it can be sent.
+    private var isBusy: Bool { model.chat(for: .library).isResponding }
+
     private var canSubmit: Bool {
-        !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isBusy && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func submit() {
@@ -417,10 +433,12 @@ struct RecentRow: View {
                     .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                Text(Duration.seconds(duration).formatted(.time(pattern: duration >= 3600 ? .hourMinute : .minuteSecond)))
-                    .font(.callout)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                if let length = LibraryFormat.optionalLength(duration) {
+                    Text(length)
+                        .font(.callout)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .buttonStyle(MenuRowStyle())

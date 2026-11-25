@@ -22,4 +22,11 @@ nonisolated enum LibraryFormat {
         return Duration.seconds(minutes * 60)
             .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated).locale(locale))
     }
+
+    /// Like `length`, but nil where there is nothing worth showing, so a meeting with no
+    /// recorded time doesn't get "0 sec".
+    static func optionalLength(_ time: TimeInterval, locale: Locale = .current) -> String? {
+        guard Int(max(0, time).rounded()) > 0 else { return nil }
+        return length(time, locale: locale)
+    }
 }

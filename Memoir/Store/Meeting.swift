@@ -164,21 +164,50 @@ nonisolated enum RecordingFiles {
 }
 
 extension ModelContainer {
+    private static var memoirSchema: Schema {
+        Schema([Meeting.self, TranscriptSegment.self, ChatMessage.self])
+    }
+
+    /// The on-disk store goes through `openMemoirStore`, which can ask the user what to do
+    /// when it cannot be opened.
     static func memoir(inMemory: Bool = false) -> ModelContainer {
-        let schema = Schema([Meeting.self, TranscriptSegment.self, ChatMessage.self])
-        let configuration: ModelConfiguration
-        if inMemory {
-            configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        } else {
-            try? FileManager.default.createDirectory(
-                at: RecordingFiles.baseDirectory, withIntermediateDirectories: true
-            )
-            configuration = ModelConfiguration(schema: schema, url: RecordingFiles.storeURL)
-        }
+        guard inMemory else { return openMemoirStore() }
+        let schema = memoirSchema
         do {
-            return try ModelContainer(for: schema, configurations: [configuration])
+            return try ModelContainer(
+                for: schema,
+                configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+            )
         } catch {
-            fatalError("Could not open the Memoir store: \(error)")
+            // Nothing on disk is involved, so this can only be a broken schema, a bug that has
+            // to show up in previews and tests rather than be worked around.
+            fatalError("Could not create the in-memory Memoir store: \(error)")
         }
+    }
+
+    static func memoirOnDisk() throws -> ModelContainer {
+        try FileManager.default.createDirectory(at: RecordingFiles.baseDirectory, withIntermediateDirectories: true)
+        let schema = memoirSchema
+        return try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, url: RecordingFiles.storeURL)]
+        )
+    }
+
+    /// Renames the store and its SQLite sidecar files so a fresh one can be created in its
+    /// place. Never deletes: the user may get the old one back with a newer version or by hand.
+    /// Returns the new location of the main store file.
+    static func moveMemoirStoreAside(now: Date = .now) throws -> URL {
+        let store = RecordingFiles.storeURL
+        let folder = store.deletingLastPathComponent()
+        let stamp = now.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false).timeSeparator(.omitted))
+        let aside = folder.appending(path: "Unreadable Memoir \(stamp).store")
+        let fileManager = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            let source = URL(filePath: store.path + suffix)
+            guard fileManager.fileExists(atPath: source.path) else { continue }
+            try fileManager.moveItem(at: source, to: URL(filePath: aside.path + suffix))
+        }
+        return aside
     }
 }

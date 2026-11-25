@@ -45,11 +45,17 @@ nonisolated enum SegmentPolicy {
 /// Not thread safe: every call must come from the owning capture's serial queue. Buffers
 /// passed to `process` must be fresh copies, since they are handed to the stream as is.
 nonisolated final class SourcePipeline: @unchecked Sendable {
+    /// Recording time to wait after a part file failed before trying again. A full disk stays
+    /// full for a while, and retrying on every buffer would create and delete a file per IO
+    /// cycle and flood the log.
+    static let writeRetryInterval: TimeInterval = 5
+
     let source: AudioSource
     private let folder: URL
     private let startHostTime: UInt64
     private let continuation: AsyncStream<CapturedAudio>.Continuation
     private let levels: LevelMonitor?
+    private let issues: IssueReporter?
     private let log = Logger(subsystem: "Memoir", category: "Audio")
 
     private var file: AVAudioFile?
@@ -57,6 +63,7 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
     private var current: PartSegment?
     private var segments: [PartSegment] = []
     private var silence: AVAudioPCMBuffer?
+    private var retryWritesAt: TimeInterval?
     private var isFinished = false
 
     /// Zeroed rather than dropped, so the part file and the transcriber keep a continuous
@@ -68,13 +75,15 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
         folder: URL,
         startHostTime: UInt64,
         continuation: AsyncStream<CapturedAudio>.Continuation,
-        levels: LevelMonitor?
+        levels: LevelMonitor?,
+        issues: IssueReporter? = nil
     ) {
         self.source = source
         self.folder = folder
         self.startHostTime = startHostTime
         self.continuation = continuation
         self.levels = levels
+        self.issues = issues
     }
 
     func process(_ buffer: AVAudioPCMBuffer, hostTime: UInt64) {
@@ -99,6 +108,12 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
     // MARK: - Part files
 
     private func write(_ buffer: AVAudioPCMBuffer, at time: TimeInterval) {
+        // Audio skipped here is still metered and transcribed, and the next segment is placed
+        // at its own time, so the gap stays where it happened.
+        if let retryAt = retryWritesAt {
+            guard time >= retryAt else { return }
+            retryWritesAt = nil
+        }
         if let segment = current, let format = fileFormat, Self.isSameLayout(format, buffer.format) {
             switch SegmentPolicy.decide(expected: segment.end, actual: time, sampleRate: segment.sampleRate) {
             case .append:
@@ -121,9 +136,15 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
             current?.frames += AVAudioFramePosition(buffer.frameLength)
         } catch {
             log.error("Writing \(self.source.rawValue, privacy: .public) part failed: \(error)")
-            // Next buffer retries with a fresh file instead of failing every write after this.
+            // The retry starts a fresh file instead of failing every write after this.
             closeSegment()
+            writeFailed(at: time)
         }
+    }
+
+    private func writeFailed(at time: TimeInterval) {
+        retryWritesAt = time + Self.writeRetryInterval
+        issues?.report(.audioNotSaved(source))
     }
 
     private func openSegment(format: AVAudioFormat, at time: TimeInterval) {
@@ -157,6 +178,7 @@ nonisolated final class SourcePipeline: @unchecked Sendable {
             file = nil
             fileFormat = nil
             current = nil
+            writeFailed(at: time)
         }
     }
 

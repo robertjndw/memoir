@@ -16,6 +16,11 @@ nonisolated struct Summarizer: Sendable {
     private static let minimumScale = 0.25
     /// Beyond this, condensing is not converging, so the notes are cut to fit instead.
     private static let maximumLevels = 4
+    /// A level is abandoned once more than this share of its parts failed: the notes would
+    /// cover too little of the meeting to present the result as a summary of it.
+    private static let maximumFailedShare = 1.0 / 3.0
+    /// Pauses before each retry of a transient error, so a busy model has time to recover.
+    static let retryDelays: [Duration] = [.seconds(2), .seconds(5), .seconds(10)]
 
     func run() async throws -> MeetingSummary {
         let lines = request.lines.filter {
@@ -74,20 +79,16 @@ nonisolated struct Summarizer: Sendable {
                 .map { sized[$0].joined(separator: "\n") }
             progress.plan(groups.count)
 
-            var notes: [String] = []
-            for (offset, group) in groups.enumerated() {
-                try Task.checkCancellation()
-                let condensed = try await condense(
+            let notes = try await Self.mapParts(groups, progress: &progress) { group, part in
+                try await condense(
                     group,
-                    part: offset + 1,
+                    part: part,
                     of: groups.count,
                     isNotes: isNotes,
                     instructions: condenseInstructions,
                     maximumTokens: budget.condenseOutput,
                     estimator: estimator
                 )
-                notes.append(contentsOf: condensed)
-                progress.complete()
             }
             pieces = notes.isEmpty ? [estimator.truncate(material, toTokens: chunkBudget)] : notes
             isNotes = true
@@ -104,7 +105,7 @@ nonisolated struct Summarizer: Sendable {
         instructions: String,
         maximumTokens: Int
     ) async throws -> MeetingSummary {
-        try await withTransientRetry {
+        try await Self.withTransientRetry {
             let session = LanguageModelSession(model: model, instructions: instructions)
             let prompt = Prompts.summaryPrompt(material: material, isNotes: isNotes, context: context)
             let stream = session.streamResponse(
@@ -143,7 +144,7 @@ nonisolated struct Summarizer: Sendable {
         estimator: TokenEstimator
     ) async throws -> [String] {
         do {
-            let response = try await withTransientRetry {
+            let response = try await Self.withTransientRetry {
                 let session = LanguageModelSession(model: model, instructions: instructions)
                 return try await session.respond(
                     to: Prompts.condensePrompt(material: text, part: part, of: total, isNotes: isNotes),
@@ -172,18 +173,53 @@ nonisolated struct Summarizer: Sendable {
         }
     }
 
-    private func withTransientRetry<T>(_ operation: () async throws -> T) async throws -> T {
-        do {
-            return try await operation()
-        } catch where IntelligenceError.isTransient(error) {
-            try await Task.sleep(for: .seconds(2))
-            return try await operation()
+    /// Condenses every part, skipping one that keeps failing so a single guardrail hit or
+    /// refusal does not discard the notes of all the others. Cancellation always propagates.
+    static func mapParts(
+        _ groups: [String],
+        progress: inout ProgressTracker,
+        condense: (String, Int) async throws -> [String]
+    ) async throws -> [String] {
+        var notes: [String] = []
+        var failed = 0
+        for (offset, group) in groups.enumerated() {
+            try Task.checkCancellation()
+            do {
+                notes += try await condense(group, offset + 1)
+            } catch {
+                // The framework can surface a stopped task as its own error type.
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                let mapped = IntelligenceError.from(error)
+                // Not specific to this part, so the remaining parts would fail the same way.
+                if let mapped = mapped as? IntelligenceError, mapped == .unsupportedLanguage || mapped == .assetsUnavailable {
+                    throw mapped
+                }
+                failed += 1
+                if Double(failed) > Double(groups.count) * maximumFailedShare { throw mapped }
+            }
+            progress.complete()
+        }
+        return notes
+    }
+
+    static func withTransientRetry<T>(
+        delays: [Duration] = retryDelays,
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        var remaining = delays[...]
+        while true {
+            do {
+                return try await operation()
+            } catch where IntelligenceError.isTransient(error) {
+                guard let delay = remaining.popFirst() else { throw error }
+                try await Task.sleep(for: delay)
+            }
         }
     }
 }
 
 /// Keeps `.condensing` monotonic while the total amount of work is still being discovered.
-nonisolated private struct ProgressTracker {
+nonisolated struct ProgressTracker {
     let emit: @Sendable (SummaryProgress) -> Void
     private var planned = 0
     private var done = 0

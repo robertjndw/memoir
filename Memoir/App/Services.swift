@@ -34,7 +34,7 @@ private nonisolated struct InertRecorder: AudioRecording {
 
 private nonisolated struct InertTranscriber: Transcribing {
     func start(streams: CaptureStreams, locale: Locale, contextualStrings: [String]) async throws
-        -> AsyncStream<TranscriptUpdate>
+        -> AsyncStream<TranscriptEvent>
     {
         AsyncStream { $0.finish() }
     }

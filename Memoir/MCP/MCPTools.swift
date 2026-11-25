@@ -36,16 +36,54 @@ nonisolated struct MCPToolResult: Sendable, Equatable {
     }
 }
 
+/// Shares one `RetrievalIndex` between all MCP connections, so transcripts are fetched and
+/// tokenized once instead of on every tool call. Whoever changes the library calls
+/// `invalidate()`; the maximum age is a backstop for changes nobody announces (a meeting
+/// still being recorded, say), so a long-lived session cannot serve stale results for long.
+nonisolated final class MCPIndexSource: @unchecked Sendable {
+    static let maximumAge: TimeInterval = 60
+
+    private let library: any MeetingLibrary
+    private let lock = NSLock()
+    private var current: RetrievalIndex?
+    private var builtAt = Date.distantPast
+
+    init(library: any MeetingLibrary) {
+        self.library = library
+    }
+
+    func index(now: Date = .now) -> RetrievalIndex {
+        lock.withLock {
+            if let current, now.timeIntervalSince(builtAt) < Self.maximumAge { return current }
+            let fresh = RetrievalIndex(corpus: library)
+            current = fresh
+            builtAt = now
+            return fresh
+        }
+    }
+
+    /// Calls already running keep the index they started with.
+    func invalidate() {
+        lock.withLock { current = nil }
+    }
+}
+
 /// The read-only meeting tools offered to MCP clients.
 ///
 /// Budgets are much larger than in the on-device chat. Clients run on models with big context
 /// windows, and passages that are cut too short just make them call again or guess.
 nonisolated struct MCPTools: Sendable {
     let library: any MeetingLibrary
+    let indexSource: MCPIndexSource
     var estimator = TokenEstimator()
     var calendar = Calendar.current
     var searchBudget = 8_000
     var transcriptBudget = 60_000
+
+    init(library: any MeetingLibrary, indexSource: MCPIndexSource? = nil) {
+        self.library = library
+        self.indexSource = indexSource ?? MCPIndexSource(library: library)
+    }
 
     static let defaultListLimit = 20
     static let maxListLimit = 200
@@ -88,8 +126,7 @@ nonisolated struct MCPTools: Sendable {
             return .failure(error.message)
         }
         let limit = min(max(limit, 1), Self.maxListLimit)
-        // A fresh index per call: sessions stay open for hours and must see new recordings.
-        let meetings = await RetrievalIndex(corpus: library).digests()
+        let meetings = await indexSource.index().digests()
             .filter { RetrievalIndex.isInRange($0.date, from: range.from, to: range.to) }
         guard !meetings.isEmpty else {
             return MCPToolResult(text: "There are no recorded meetings\(Self.rangeText(from: from, to: to)).")
@@ -131,7 +168,7 @@ nonisolated struct MCPTools: Sendable {
         } catch {
             return .failure(error.message)
         }
-        let result = await RetrievalIndex(corpus: library).searchLibrary(
+        let result = await indexSource.index().searchLibrary(
             query: query,
             from: range.from,
             to: range.to,
@@ -153,7 +190,7 @@ nonisolated struct MCPTools: Sendable {
                 "\"\(id)\" is not a meeting id. Ids are UUIDs such as 1F0C3B5E-8A1D-4C4B-9F64-2D4C8E1A7B90, as returned by list_meetings and search_meetings."
             )
         }
-        let index = RetrievalIndex(corpus: library)
+        let index = indexSource.index()
         guard let meeting = await index.digest(uuid) else {
             return .failure("There is no meeting with id \(uuid.uuidString). It may have been deleted. Use list_meetings or search_meetings to find current ids.")
         }

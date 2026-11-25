@@ -19,12 +19,19 @@ final class MCPServer {
 
     @ObservationIgnored private let socketURL: URL
     @ObservationIgnored private let library: any MeetingLibrary
+    @ObservationIgnored private let indexSource: MCPIndexSource
     @ObservationIgnored private var listener: MCPSocketListener?
     @ObservationIgnored private var terminationObserver: (any NSObjectProtocol)?
 
     init(socketURL: URL = RecordingFiles.mcpSocketURL, library: any MeetingLibrary) {
         self.socketURL = socketURL
         self.library = library
+        indexSource = MCPIndexSource(library: library)
+    }
+
+    /// Meetings were added, changed or deleted: the next tool call reads the library afresh.
+    func libraryChanged() {
+        indexSource.invalidate()
     }
 
     /// The bridge executable inside the app bundle that MCP clients are configured to run.
@@ -75,7 +82,7 @@ final class MCPServer {
             return
         }
         let id = UUID()
-        let session = MCPSession(tools: MCPTools(library: library), serverVersion: Self.version)
+        let session = MCPSession(tools: MCPTools(library: library, indexSource: indexSource), serverVersion: Self.version)
         Task { [weak self] in
             await Self.run(connection, session: session) { name in
                 guard let self, self.listener === listener else { return }

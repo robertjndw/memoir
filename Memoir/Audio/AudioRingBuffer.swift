@@ -81,6 +81,29 @@ nonisolated final class AudioRingBuffer: @unchecked Sendable {
         return chunks[consumerChunk % chunkCapacity]
     }
 
+    /// How many unread chunks, starting with the oldest, form one run of back-to-back audio
+    /// (each starting within `tolerance` host ticks of where the previous one ended), and how
+    /// many frames they hold. Stops before the run would exceed `maxFrames`, but always counts
+    /// the first chunk. Nil when nothing is unread.
+    func contiguousRun(maxFrames: Int, sampleRate: Double, tolerance: UInt64) -> (chunks: Int, frames: Int)? {
+        let published = publishedChunks.load(ordering: .acquiring)
+        guard consumerChunk < published else { return nil }
+        var count = 0
+        var frames = 0
+        var expectedHost: UInt64 = 0
+        for index in consumerChunk..<published {
+            let chunk = chunks[index % chunkCapacity]
+            if count > 0 {
+                let jump = chunk.hostTime > expectedHost ? chunk.hostTime - expectedHost : expectedHost - chunk.hostTime
+                if jump > tolerance || frames + chunk.frames > maxFrames { break }
+            }
+            count += 1
+            frames += chunk.frames
+            expectedHost = chunk.hostTime + HostClock.ticks(forSeconds: Double(chunk.frames) / sampleRate)
+        }
+        return (count, frames)
+    }
+
     /// Consumes the chunk returned by `peek`, deinterleaving it into `destination` (one
     /// pointer per channel) starting at frame `offset`.
     func consume(_ chunk: Chunk, into destination: UnsafePointer<UnsafeMutablePointer<Float>>, at offset: Int) {

@@ -182,6 +182,38 @@ nonisolated enum AudioFixtures {
         #expect(ring.peek() == nil)
     }
 
+    @Test func contiguousRunStopsAtJumpsAndSizeLimit() {
+        let ring = AudioRingBuffer(channels: 1, frameCapacity: 48_000, chunkCapacity: 64)
+        let cycle = HostClock.ticks(forSeconds: 0.01)
+        let tolerance = HostClock.ticks(forSeconds: 0.002)
+        #expect(ring.contiguousRun(maxFrames: 1000, sampleRate: 48_000, tolerance: tolerance) == nil)
+
+        // Three back-to-back 10 ms cycles, then one that starts 50 ms late.
+        for index in 0..<3 {
+            ring.write(frames: 480, hostTime: 1_000 + UInt64(index) * cycle) { _, _ in 0 }
+        }
+        ring.write(frames: 480, hostTime: 1_000 + 8 * cycle) { _, _ in 0 }
+
+        let run = ring.contiguousRun(maxFrames: 48_000, sampleRate: 48_000, tolerance: tolerance)
+        #expect(run?.chunks == 3 && run?.frames == 1440)
+        let capped = ring.contiguousRun(maxFrames: 1000, sampleRate: 48_000, tolerance: tolerance)
+        #expect(capped?.chunks == 2 && capped?.frames == 960)
+        // The first chunk always counts, even when it alone is over the limit.
+        let tiny = ring.contiguousRun(maxFrames: 100, sampleRate: 48_000, tolerance: tolerance)
+        #expect(tiny?.chunks == 1 && tiny?.frames == 480)
+
+        let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 1440)
+        defer { scratch.deallocate() }
+        var channels = [scratch]
+        channels.withUnsafeMutableBufferPointer { pointers in
+            for _ in 0..<3 {
+                ring.consume(ring.peek()!, into: UnsafePointer(pointers.baseAddress!), at: 0)
+            }
+        }
+        let rest = ring.contiguousRun(maxFrames: 48_000, sampleRate: 48_000, tolerance: tolerance)
+        #expect(rest?.chunks == 1 && rest?.frames == 480)
+    }
+
     @Test func monoCopyAveragesOrPicksFirstChannel() throws {
         let stereo = AudioFixtures.sine(frequency: 100, sampleRate: 48_000, channels: 2, seconds: 0.01)
         let right = stereo.floatChannelData![1]
@@ -306,6 +338,44 @@ nonisolated enum AudioFixtures {
         #expect(abs(duration - 3.1) < 0.001)
         #expect(try AudioFixtures.rms(of: destination, from: 1.1, to: 1.4) < 0.01)
         #expect(try AudioFixtures.rms(of: destination, from: 2.3, to: 2.9) > 0.2)
+    }
+
+    @Test func partFileFailureIsReportedOnceAndRetriedLater() async throws {
+        let folder = try AudioFixtures.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // A part file cannot be created in a folder that does not exist yet.
+        let missing = folder.appending(path: "missing", directoryHint: .isDirectory)
+        let reported = Mutex<[RecordingIssue]>([])
+        let (stream, continuation) = AsyncStream.makeStream(of: CapturedAudio.self)
+        let start = HostClock.now
+        let pipeline = SourcePipeline(
+            source: .system, folder: missing, startHostTime: start,
+            continuation: continuation, levels: nil,
+            issues: IssueReporter { issue in reported.withLock { $0.append(issue) } }
+        )
+        func host(_ seconds: Double) -> UInt64 { start + HostClock.ticks(forSeconds: seconds) }
+
+        for index in 0..<10 {
+            pipeline.process(AudioFixtures.sine(frequency: 440, sampleRate: 48_000, channels: 2, seconds: 0.1), hostTime: host(Double(index) * 0.1))
+        }
+        #expect(reported.withLock { $0 } == [.audioNotSaved(.system)])
+
+        // Space came back. Writing resumes after the retry interval, at the buffer's own time.
+        try FileManager.default.createDirectory(at: missing, withIntermediateDirectories: true)
+        pipeline.process(AudioFixtures.sine(frequency: 440, sampleRate: 48_000, channels: 2, seconds: 0.1), hostTime: host(1))
+        let retry = SourcePipeline.writeRetryInterval
+        pipeline.process(AudioFixtures.sine(frequency: 440, sampleRate: 48_000, channels: 2, seconds: 0.5), hostTime: host(retry + 0.5))
+        let segments = pipeline.finish()
+
+        #expect(segments.count == 1)
+        #expect(abs((segments.first?.offset ?? 0) - (retry + 0.5)) < 0.001)
+        #expect(abs((segments.first?.duration ?? 0) - 0.5) < 0.001)
+        #expect(reported.withLock { $0 }.count == 1)
+
+        // Audio that was not written still reached the transcriber.
+        var chunks = 0
+        for await _ in stream { chunks += 1 }
+        #expect(chunks == 12)
     }
 
     @Test func mutedBuffersAreZeroedWithoutBreakingTheTimeline() async throws {
