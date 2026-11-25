@@ -151,7 +151,7 @@ struct TranscriptView: View {
     private func transcript(lines: [TranscriptLine], matches: [UUID]) -> some View {
         TranscriptScroller(
             lines: lines,
-            rows: TranscriptGrouping.rows(lines),
+            rows: TranscriptGrouping.rows(lines, mutedRanges: meeting.mutedRanges),
             query: query,
             focusedMatch: matches.isEmpty ? nil : matches[min(matchPosition, matches.count - 1)],
             isLive: isLive,
@@ -182,6 +182,16 @@ struct TranscriptView: View {
     @Previewable @State var model = AppModel.preview(samples: true)
     @Previewable @State var playback = PlaybackController.preview(at: 18, of: 42 * 60)
     TranscriptView(meeting: model.previewMeeting("Design Review"), playback: playback, findRequested: .constant(false))
+        .environment(model)
+        .modelContainer(model.container)
+        .frame(width: 720, height: 480)
+}
+
+#Preview("Muted") {
+    @Previewable @State var model = AppModel.preview(samples: true) {
+        $0.previewMeeting("Design Review").mutedRanges = [MutedRange(start: 15.5, end: 23)]
+    }
+    TranscriptView(meeting: model.previewMeeting("Design Review"), playback: PlaybackController(), findRequested: .constant(false))
         .environment(model)
         .modelContainer(model.container)
         .frame(width: 720, height: 480)

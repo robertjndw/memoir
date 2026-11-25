@@ -7,14 +7,48 @@ nonisolated struct TranscriptBlock: Identifiable, Equatable {
     var start: TimeInterval { lines[0].start }
 }
 
-/// One line of the rendered transcript. Rows are flat rather than nested in blocks so every line
-/// is a direct child of the lazy stack, which keeps scroll-to-line reliable for lines that have
-/// not been materialized yet.
+/// One row of the rendered transcript: a line, or a marker where the user muted their
+/// microphone. Rows are flat rather than nested in blocks so every line is a direct child of the
+/// lazy stack, which keeps scroll-to-line reliable for lines that have not been materialized yet.
 nonisolated struct TranscriptRow: Identifiable, Equatable {
-    var line: TranscriptLine
-    /// The first line of a speaker turn, which carries the speaker and timestamp header.
-    var startsBlock: Bool
-    var id: UUID { line.id }
+    enum Content: Equatable {
+        case line(TranscriptLine)
+        case muted(MutedRange)
+    }
+
+    let content: Content
+    /// A line that opens a speaker turn shows the speaker and timestamp header. Markers are
+    /// always set apart like a new turn.
+    let startsBlock: Bool
+    /// A line row has the line's ID, so scrolling to a line ID finds its row.
+    let id: UUID
+
+    var line: TranscriptLine? {
+        if case .line(let line) = content { line } else { nil }
+    }
+
+    init(line: TranscriptLine, startsBlock: Bool) {
+        content = .line(line)
+        self.startsBlock = startsBlock
+        id = line.id
+    }
+
+    init(marker range: MutedRange) {
+        content = .muted(range)
+        startsBlock = true
+        id = Self.markerID(for: range)
+    }
+
+    /// Built from the range instead of random so the row keeps its identity when the rows are
+    /// rebuilt.
+    private static func markerID(for range: MutedRange) -> UUID {
+        let b = withUnsafeBytes(of: range.start.bitPattern) { Array($0) }
+            + withUnsafeBytes(of: range.end.bitPattern) { Array($0) }
+        return UUID(uuid: (
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+            b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+        ))
+    }
 }
 
 nonisolated enum TranscriptGrouping {
@@ -35,11 +69,22 @@ nonisolated enum TranscriptGrouping {
         return blocks
     }
 
-    static func rows(_ lines: [TranscriptLine]) -> [TranscriptRow] {
+    /// `lines` must be sorted by start. Each muted range gets a marker before the first line
+    /// that starts at or after it, and the line after a marker opens a new speaker turn.
+    static func rows(_ lines: [TranscriptLine], mutedRanges: [MutedRange] = []) -> [TranscriptRow] {
+        let markers = Set(mutedRanges).sorted { ($0.start, $0.end) < ($1.start, $1.end) }
         var rows: [TranscriptRow] = []
-        rows.reserveCapacity(lines.count)
+        rows.reserveCapacity(lines.count + markers.count)
+        var nextMarker = 0
         for line in lines {
-            rows.append(TranscriptRow(line: line, startsBlock: rows.last?.line.speaker != line.speaker))
+            while nextMarker < markers.count, markers[nextMarker].start <= line.start {
+                rows.append(TranscriptRow(marker: markers[nextMarker]))
+                nextMarker += 1
+            }
+            rows.append(TranscriptRow(line: line, startsBlock: rows.last?.line?.speaker != line.speaker))
+        }
+        for marker in markers[nextMarker...] {
+            rows.append(TranscriptRow(marker: marker))
         }
         return rows
     }

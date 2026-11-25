@@ -10,6 +10,7 @@ actor AudioRecorder: AudioRecording {
         var microphone: MicrophoneCapture?
         var system: SystemAudioTap?
         let levels: LevelMonitor
+        let startHostTime: UInt64
     }
 
     private enum Phase {
@@ -89,13 +90,19 @@ actor AudioRecorder: AudioRecording {
             throw microphoneAllowed ? RecordingError.noAudioSource : RecordingError.microphonePermissionDenied
         }
 
-        phase = .recording(Session(microphone: microphone, system: system, levels: levels))
+        phase = .recording(Session(microphone: microphone, system: system, levels: levels, startHostTime: startHostTime))
         return CaptureStreams(
             microphone: microphoneStream,
             system: systemStream,
             levels: levelStream,
             unavailable: unavailable
         )
+    }
+
+    func setMicrophoneMuted(_ muted: Bool) async -> TimeInterval? {
+        guard case .recording(let session) = phase, let microphone = session.microphone else { return nil }
+        await microphone.setMuted(muted)
+        return HostClock.recordingTime(of: HostClock.now, start: session.startHostTime)
     }
 
     func stop() async -> RecordingOutput {

@@ -28,6 +28,7 @@ extension Services {
 
 private nonisolated struct InertRecorder: AudioRecording {
     func start() async throws -> CaptureStreams { throw RecordingError.noAudioSource }
+    func setMicrophoneMuted(_ muted: Bool) async -> TimeInterval? { nil }
     func stop() async -> RecordingOutput { RecordingOutput(audioURL: nil, duration: 0) }
 }
 

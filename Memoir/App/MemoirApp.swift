@@ -154,7 +154,9 @@ struct MenuBarLabel: View {
     var body: some View {
         // Status items are rendered as templates, so state is carried by the glyph and motion, not colour.
         HStack(spacing: 4) {
-            Image(systemName: model.isRecording ? "record.circle.fill" : "waveform")
+            // Swap the glyph rather than add a second image. Status item labels don't reliably
+            // render more than one.
+            Image(systemName: glyph)
                 .symbolEffect(.pulse, options: .repeating, isActive: model.isRecording && !reduceMotion)
             if model.isRecording, let start = model.recordingStartDate {
                 Text(LibraryFormat.timecode(now.timeIntervalSince(start)))
@@ -162,7 +164,7 @@ struct MenuBarLabel: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.isRecording ? "Memoir, recording" : "Memoir")
+        .accessibilityLabel(accessibilityLabel)
         .onAppear {
             model.openWindow = { id in openWindow(id: id) }
         }
@@ -173,5 +175,15 @@ struct MenuBarLabel: View {
                 try? await Task.sleep(for: .seconds(1))
             }
         }
+    }
+
+    private var glyph: String {
+        guard model.isRecording else { return "waveform" }
+        return model.isMicrophoneMuted ? "mic.slash.circle.fill" : "record.circle.fill"
+    }
+
+    private var accessibilityLabel: LocalizedStringKey {
+        guard model.isRecording else { return "Memoir" }
+        return model.isMicrophoneMuted ? "Memoir, recording, microphone muted" : "Memoir, recording"
     }
 }

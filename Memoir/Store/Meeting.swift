@@ -24,6 +24,9 @@ final class Meeting {
     // Stored as JSON rather than a composite attribute: SwiftData is unreliable with nested
     // arrays of Codable structs.
     var summaryData: Data?
+    /// JSON for the same reason as `summaryData`. Optional with no default so existing stores
+    /// get a lightweight migration.
+    var mutedRangesData: Data?
     /// Completed summary action items, keyed by task text instead of index so they survive
     /// regenerating the summary. Leftover entries are harmless.
     var completedActionItems: [String] = []
@@ -59,6 +62,12 @@ final class Meeting {
     var summary: MeetingSummary? {
         get { summaryData.flatMap { try? JSONDecoder().decode(MeetingSummary.self, from: $0) } }
         set { summaryData = newValue.flatMap { try? JSONEncoder().encode($0) } }
+    }
+
+    /// Stretches where the user muted their microphone in Memoir, in the order they ended.
+    var mutedRanges: [MutedRange] {
+        get { mutedRangesData.flatMap { try? JSONDecoder().decode([MutedRange].self, from: $0) } ?? [] }
+        set { mutedRangesData = newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue) }
     }
 
     /// Relationship arrays are unordered, so always read the transcript through this.
