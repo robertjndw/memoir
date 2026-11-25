@@ -47,7 +47,7 @@ function run(argv) {
 JS
 }
 
-# Memoir quits without asking, even mid-recording, so check first.
+# Quitting ends a running recording (Memoir saves it first, without asking), so check first.
 if pgrep -qf "^$dest/Contents/MacOS/Memoir"; then
   read -r -p "Memoir is running and will be restarted. Nothing recording? [y/N] " reply
   [[ "$reply" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
