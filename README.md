@@ -23,6 +23,11 @@ microphone and the other participants separately. When the call is over you
 have a transcript, a summary and the action items. There's no account, and
 recordings stay in `~/Library/Application Support/Memoir`.
 
+If you want more, Settings > Transcription offers two open models to download:
+pyannote Community-1 tells the other participants apart, and Parakeet
+transcribes the recording again more accurately. They run on your Mac as well.
+Downloading them from Hugging Face is the only time they use the network.
+
 ## Features
 
 ### Recording
@@ -69,6 +74,9 @@ recordings stay in `~/Library/Application Support/Memoir`.
 - Export a meeting as Markdown, reveal its folder in Finder, rename it inline
   or delete it.
 - A recording without a transcript can be transcribed afterwards.
+- With speaker identification on, the other side shows up as Speaker 1,
+  Speaker 2 and so on. Click a name to rename that speaker for the meeting;
+  summaries, chat and exports use the name too.
 
 ### Ask Memoir
 
@@ -162,7 +170,9 @@ tap that excludes Memoir. The two tracks stay separate while recording and are
 mixed into a mono `audio.m4a` at the end, about 29 MB per hour.
 
 Each track gets its own `SpeechAnalyzer`, which is how the transcript knows
-whether a line is "You" or "Others". Summaries and chat use the Foundation
+whether a line is "You" or "Others". With speaker identification on, the system
+audio track is split by voice once the recording has ended, which is where
+"Speaker 1" and "Speaker 2" come from. Summaries and chat use the Foundation
 Models framework. For chat, Memoir looks up the relevant transcript passages
 with keyword and semantic search, and the model can call tools to search and
 list meetings.
