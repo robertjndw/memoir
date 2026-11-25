@@ -45,8 +45,8 @@ recordings stay in `~/Library/Application Support/Memoir`.
 
 - Memoir suggests recording when a meeting app takes the microphone (Zoom,
   Teams, FaceTime, Google Meet, Webex, Slack, Discord and a dozen more, plus
-  web meetings in browsers), when a calendar meeting starts or when the camera
-  turns on. Each signal can be turned off in Settings > Detection.
+  web meetings in browsers, which count once the camera is on) or when a
+  calendar meeting starts. Each signal can be turned off in Settings > Detection.
 - A suggestion that matches a calendar event names the recording after the
   event and lists its attendees.
 - When the call app lets go of the microphone, Memoir offers to stop.

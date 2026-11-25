@@ -226,10 +226,16 @@ nonisolated struct DetectionPolicy {
         }
         // A call in progress either was already offered or is about to be; either way it
         // stands for this event. A pending one is waited for so both arrive as one hint.
-        let callInProgress = sessions.values.contains { session in
+        // An offered or dismissed one is marked handled now, otherwise the event would fire
+        // as soon as that call ends.
+        let calls = sessions.values.filter { session in
             session.isActive && qualifies(session.app, camera: camera, event: event)
         }
-        if callInProgress { return nil }
+        if calls.contains(where: { !$0.handled }) { return nil }
+        if !calls.isEmpty {
+            handledEvents[eventKey] = event.end
+            return nil
+        }
         handledEvents[eventKey] = event.end
         return MeetingSuggestion(kind: .start, event: event)
     }
@@ -247,6 +253,12 @@ nonisolated struct DetectionPolicy {
             recording.lastApp = recording.apps.values.min { $0.bundleID < $1.bundleID }
         }
         for app in holders where qualifies(app, camera: camera, event: event) {
+            // Apps opening the microphone for a moment at launch must not become part of the
+            // call, or their release would suggest stopping. Sessions are kept up to date
+            // while recording, so `activeSince` is the start of this use.
+            guard let session = sessions[app.bundleID], session.isActive,
+                  now.timeIntervalSince(session.activeSince) >= timing.micDebounce
+            else { continue }
             recording.apps[app.bundleID] = app
             recording.lastApp = app
         }
