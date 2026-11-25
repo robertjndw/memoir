@@ -303,6 +303,91 @@ nonisolated enum AudioFixtures {
         #expect(!FileManager.default.fileExists(atPath: destination.path))
     }
 
+    @Test func trackRendersAtSixteenKilohertzMonoOnTheSharedTimeline() throws {
+        let folder = try AudioFixtures.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = try AudioFixtures.part(
+            in: folder, name: "part-a", offset: 0,
+            buffer: AudioFixtures.sine(frequency: 440, sampleRate: 48_000, channels: 1, seconds: 1)
+        )
+        let second = try AudioFixtures.part(
+            in: folder, name: "part-b", offset: 2.5,
+            buffer: AudioFixtures.sine(frequency: 440, sampleRate: 44_100, channels: 1, seconds: 1)
+        )
+        let destination = folder.appending(path: "track-microphone.caf")
+
+        let duration = try #require(try AudioMixdown.renderTrack([first, second], to: destination))
+        #expect(abs(duration - 3.5) < 0.001)
+
+        let file = try AVAudioFile(forReading: destination)
+        #expect(file.fileFormat.sampleRate == 16_000)
+        #expect(file.fileFormat.channelCount == 1)
+        #expect(file.fileFormat.streamDescription.pointee.mFormatID == kAudioFormatLinearPCM)
+        #expect(file.fileFormat.streamDescription.pointee.mBitsPerChannel == 16)
+        #expect(abs(Double(file.length) / 16_000 - 3.5) < 0.001)
+
+        #expect(try AudioFixtures.rms(of: destination, from: 0.1, to: 0.9) > 0.2)
+        #expect(try AudioFixtures.rms(of: destination, from: 1.2, to: 2.3) < 0.01)
+        #expect(try AudioFixtures.rms(of: destination, from: 2.6, to: 3.4) > 0.2)
+
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.contains("mixing") }
+        #expect(leftovers.isEmpty)
+    }
+
+    @Test func trackDownmixesStereo() throws {
+        let folder = try AudioFixtures.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // The same tone in both channels must stay at its amplitude, not double or halve.
+        let stereo = try AudioFixtures.part(
+            in: folder, name: "part-s", offset: 0,
+            buffer: AudioFixtures.sine(frequency: 300, sampleRate: 48_000, channels: 2, seconds: 1, amplitude: 0.5)
+        )
+        let destination = folder.appending(path: "track-system.caf")
+        _ = try #require(try AudioMixdown.renderTrack([stereo], to: destination))
+        #expect(try AVAudioFile(forReading: destination).fileFormat.channelCount == 1)
+        let rms = try AudioFixtures.rms(of: destination, from: 0.1, to: 0.9)
+        #expect(abs(rms - 0.5 / Float(2).squareRoot()) < 0.03)
+    }
+
+    @Test func emptyTrackProducesNoFile() throws {
+        let folder = try AudioFixtures.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let destination = folder.appending(path: "track-microphone.caf")
+        #expect(try AudioMixdown.renderTrack([], to: destination) == nil)
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+    }
+
+    @Test func staleTracksAreRemovedButPartsAndAudioStay() throws {
+        let folder = try AudioFixtures.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let names = [
+            "track-microphone.caf", "track-system.caf", ".track-system-mixing.caf",
+            "part-microphone-0-0ms.caf", "audio.m4a",
+        ]
+        for name in names { FileManager.default.createFile(atPath: folder.appending(path: name).path, contents: Data([0])) }
+
+        #expect(RecordingRecovery.parse("track-microphone.caf") == nil)
+        RecordingRecovery.removeStaleTracks(in: folder)
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(remaining == ["audio.m4a", "part-microphone-0-0ms.caf"])
+    }
+
+    @Test func trackSweepSkipsMeetingsInUse() throws {
+        let root = try AudioFixtures.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let busy = UUID()
+        let idle = UUID()
+        for id in [busy, idle] {
+            let folder = root.appending(path: id.uuidString, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: folder.appending(path: "track-system.caf").path, contents: Data([0]))
+        }
+        RecordingRecovery.removeStaleTracks(skipping: [busy], recordings: root)
+        #expect(FileManager.default.fileExists(atPath: root.appending(path: "\(busy.uuidString)/track-system.caf").path))
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "\(idle.uuidString)/track-system.caf").path))
+    }
+
     @Test func pipelineSplitsOnFormatChangeAndPadsGaps() async throws {
         let folder = try AudioFixtures.temporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
