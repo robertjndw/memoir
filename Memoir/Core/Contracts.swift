@@ -450,7 +450,14 @@ struct MeetingHintActions {
     var muteApp: (() -> Void)?
 }
 
+nonisolated enum MeetingHintStyle: Sendable, Equatable {
+    /// A system notification, subject to the user's notification and Focus settings.
+    case notification
+    /// A tip that points at Memoir's menu bar icon.
+    case menuBarTip
+}
+
 protocol MeetingHintPresenting: AnyObject {
-    func show(_ suggestion: MeetingSuggestion, actions: MeetingHintActions)
+    func show(_ suggestion: MeetingSuggestion, style: MeetingHintStyle, actions: MeetingHintActions)
     func hide()
 }

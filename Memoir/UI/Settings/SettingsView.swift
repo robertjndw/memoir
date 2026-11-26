@@ -298,6 +298,17 @@ private struct DetectionPane: View {
                 )
             }
 
+            Section("Show suggestions") {
+                toggle(
+                    "As a tip under the menu bar icon",
+                    detail: "Shows up even during Focus. If the icon is hidden, you get a notification instead.",
+                    isOn: $settings.menuBarTips
+                )
+                if permissions.notifications == .denied {
+                    NotificationAccessRow(menuBarTips: settings.menuBarTips)
+                }
+            }
+
             Section {
                 if settings.mutedBundleIDs.isEmpty {
                     Text("No apps are muted. Choosing \"Don't ask for this app\" in a suggestion adds it here.")
@@ -338,6 +349,22 @@ private struct CalendarAccessRow: View {
         } label: {
             Label("Calendar access is off", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
+        }
+    }
+}
+
+private struct NotificationAccessRow: View {
+    let menuBarTips: Bool
+
+    var body: some View {
+        LabeledContent {
+            Button("Open Settings") { Permissions.openNotifications() }
+        } label: {
+            Label("Notifications are off", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(menuBarTips
+                ? "Suggestions can't fall back to a notification when the menu bar icon is hidden."
+                : "Meeting suggestions won't appear.")
         }
     }
 }
@@ -594,6 +621,14 @@ private struct PrivacyPane: View {
                     Text("System Audio Recording")
                     Text("Records the other participants. macOS asks the first time you record, and does not let apps check the answer. Review it in Privacy & Security.")
                 }
+
+                PermissionRow(
+                    title: "Notifications",
+                    detail: "Shows meeting suggestions.",
+                    state: permissions.notifications == .granted ? .granted : (permissions.notifications == .denied ? .denied : .notDetermined),
+                    request: { Task { await permissions.requestNotifications() } },
+                    openSettings: { Permissions.openNotifications() }
+                )
 
                 PermissionRow(
                     title: "Calendars",

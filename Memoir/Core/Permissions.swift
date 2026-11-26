@@ -1,6 +1,7 @@
 import AVFoundation
 import AppKit
 import Observation
+import UserNotifications
 
 /// Privacy permissions the app can read. System audio recording is deliberately absent:
 /// there is no public API to query it, macOS asks the first time a recording starts.
@@ -13,6 +14,8 @@ final class Permissions {
     }
 
     private(set) var microphone: Access = .notDetermined
+    /// Meeting suggestions are system notifications, so without this they never show.
+    private(set) var notifications: Access = .notDetermined
     private(set) var calendarGranted = false
     /// EventKit access cannot be told apart as "never asked" versus "denied" through
     /// `CalendarProviding`, so a refused request is remembered for this session.
@@ -22,6 +25,7 @@ final class Permissions {
 
     init() {
         refreshMicrophone()
+        Task { await refreshNotifications() }
     }
 
     func bind(calendar: any CalendarProviding) {
@@ -33,6 +37,7 @@ final class Permissions {
     /// becomes active again.
     func refresh() {
         refreshMicrophone()
+        Task { await refreshNotifications() }
         calendarGranted = calendar?.hasAccess ?? false
         if calendarGranted { calendarRefused = false }
     }
@@ -48,6 +53,19 @@ final class Permissions {
     func requestMicrophone() async {
         _ = await AVCaptureDevice.requestAccess(for: .audio)
         refreshMicrophone()
+    }
+
+    private func refreshNotifications() async {
+        notifications = switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
+        case .authorized, .provisional, .ephemeral: .granted
+        case .notDetermined: .notDetermined
+        default: .denied
+        }
+    }
+
+    func requestNotifications() async {
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        await refreshNotifications()
     }
 
     func requestCalendar() async {
@@ -67,6 +85,11 @@ final class Permissions {
 
     static func open(_ pane: Pane) {
         openSystemSettings("com.apple.preference.security?\(pane.rawValue)")
+    }
+
+    /// Notification settings have no privacy pane. They live under the app's own entry.
+    static func openNotifications() {
+        openSystemSettings("com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "")")
     }
 
     static func openSystemSettings(_ path: String) {

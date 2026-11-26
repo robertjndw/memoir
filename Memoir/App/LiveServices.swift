@@ -12,7 +12,7 @@ extension Services {
             intelligence: AppleIntelligence(),
             calendar: calendar,
             detector: MeetingDetector(calendar: calendar),
-            hints: MeetingHintPanelController()
+            hints: MeetingHintRouter()
         )
     }
 }

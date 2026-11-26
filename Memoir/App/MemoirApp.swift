@@ -55,6 +55,17 @@ struct MemoirApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    #if DEBUG
+    // Debug builds are not LSUIElement, because Xcode previews never finish launching an
+    // agent app. Outside of previews they turn into one here, so running from Xcode still
+    // behaves like the shipped menu bar app. It has to be after launch: SwiftUI sets the
+    // policy from Info.plist during launch and would undo an earlier change.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !ProcessInfo.processInfo.isRunningForPreviews else { return }
+        NSApp.setActivationPolicy(.accessory)
+    }
+    #endif
+
     // Every way of quitting ends up here: the menu bar window, the Dock, the app menu, an
     // update relaunch and logging out. Quitting mid-recording would drop the audio mix and the
     // tail of the transcript, so the recording is finalized first.
@@ -75,10 +86,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppModel {
-    /// The one live instance. Under test the engines are inert and the store is in memory, so
-    /// hosting the tests in the app never touches real recordings or hardware.
+    /// The one live instance. Under test and in Xcode previews the engines are inert and the
+    /// store is in memory, so neither touches real recordings or hardware. Previews launch the
+    /// whole app, and starting the real engines there stalls the launch until it times out.
     static let shared: AppModel = {
         let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.isRunningForPreviews
         let model = AppModel(
             settings: AppSettings(),
             container: .memoir(inMemory: isTesting),
@@ -97,7 +110,17 @@ extension AppModel {
     /// End-to-end smoke test without touching the UI:
     /// `Memoir -debugAutoRecordSeconds 15` records for that long, then stops and logs the result.
     /// `-debugOpenLibrary YES` opens the Library window at launch.
+    /// `-debugSuggestApp com.tinyspeck.slackmacgap` shows a meeting suggestion for that app.
     private func runDebugRecordingIfRequested() {
+        if let bundleID = UserDefaults.standard.string(forKey: "debugSuggestApp") {
+            Task {
+                // The status item needs a moment to land in the menu bar.
+                try? await Task.sleep(for: .seconds(2))
+                let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+                    .map { FileManager.default.displayName(atPath: $0.path(percentEncoded: false)) }
+                debugSuggest(MeetingSuggestion(kind: .start, appName: name ?? bundleID, bundleID: bundleID))
+            }
+        }
         if UserDefaults.standard.bool(forKey: "debugOpenLibrary") {
             Task {
                 try? await Task.sleep(for: .seconds(1))
@@ -128,6 +151,15 @@ extension AppModel {
         }
     }
     #endif
+}
+
+extension ProcessInfo {
+    /// Xcode previews launch the whole app and wait for it to finish launching as a regular
+    /// app. Turning it into an agent app at any point during that launch stalls the preview
+    /// until it times out.
+    var isRunningForPreviews: Bool {
+        environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
 }
 
 extension ModelContainer {

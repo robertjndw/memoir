@@ -54,6 +54,9 @@ Downloading them from Hugging Face is the only time they use the network.
   calendar meeting starts. Each signal can be turned off in Settings > Detection.
 - A suggestion that matches a calendar event names the recording after the
   event and lists its attendees.
+- Suggestions arrive as macOS notifications, so your notification and Focus
+  settings apply. Settings > Detection can show them as a tip under Memoir's
+  menu bar icon instead.
 - When the call app lets go of the microphone, Memoir offers to stop.
 - Choose "Don't ask for this app" in a suggestion to mute an app. Muted apps
   can be unmuted in Settings.

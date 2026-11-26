@@ -15,6 +15,7 @@ final class AppSettings {
         static let mcpEnabled = "mcpEnabled"
         static let identifySpeakers = "identifySpeakers"
         static let enhancedTranscription = "enhancedTranscription"
+        static let menuBarTips = "menuBarTips"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -39,6 +40,8 @@ final class AppSettings {
     var mutedBundleIDs: Set<String> {
         didSet { defaults.set(mutedBundleIDs.sorted(), forKey: Key.mutedBundleIDs); detectionChanged?() }
     }
+    /// Show meeting suggestions as a tip under the menu bar icon instead of a notification.
+    var menuBarTips: Bool { didSet { defaults.set(menuBarTips, forKey: Key.menuBarTips) } }
     /// Transcription language. Empty means "follow the system language".
     var localeIdentifier: String { didSet { defaults.set(localeIdentifier, forKey: Key.localeIdentifier) } }
     var hasCompletedOnboarding: Bool {
@@ -74,6 +77,7 @@ final class AppSettings {
         detectCalendar = defaults.bool(forKey: Key.detectCalendar)
         detectCamera = defaults.bool(forKey: Key.detectCamera)
         suggestStopping = defaults.bool(forKey: Key.suggestStopping)
+        menuBarTips = defaults.bool(forKey: Key.menuBarTips)
         mutedBundleIDs = Set(defaults.stringArray(forKey: Key.mutedBundleIDs) ?? [])
         localeIdentifier = defaults.string(forKey: Key.localeIdentifier) ?? ""
         hasCompletedOnboarding = defaults.bool(forKey: Key.hasCompletedOnboarding)

@@ -7,7 +7,7 @@ struct OnboardingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Step: Int, CaseIterable {
-        case welcome, microphone, systemAudio, calendar, speech, ready
+        case welcome, microphone, systemAudio, calendar, notifications, speech, ready
     }
 
     @State private var step = Step.welcome
@@ -31,6 +31,7 @@ struct OnboardingView: View {
         .animation(.smooth(duration: 0.3), value: permissions.microphone)
         .animation(.smooth(duration: 0.3), value: permissions.calendarGranted)
         .animation(.smooth(duration: 0.3), value: permissions.calendarRefused)
+        .animation(.smooth(duration: 0.3), value: permissions.notifications)
         .animation(.smooth(duration: 0.3), value: speech.status)
         .sensoryFeedback(.success, trigger: grantedCount)
         .task {
@@ -46,7 +47,7 @@ struct OnboardingView: View {
 
     /// Counts up as permissions are granted and the model finishes installing.
     private var grantedCount: Int {
-        [permissions.microphone == .granted, permissions.calendarGranted, speech.status == .installed]
+        [permissions.microphone == .granted, permissions.calendarGranted, permissions.notifications == .granted, speech.status == .installed]
             .count { $0 }
     }
 
@@ -139,6 +140,28 @@ struct OnboardingView: View {
                 } else {
                     Button("Allow Calendar Access") { Task { await permissions.requestCalendar() } }
                         .controlSize(.large)
+                }
+            }
+
+        case .notifications:
+            StepLayout(
+                symbol: "bell.badge.fill",
+                title: "Meeting Suggestions",
+                message: "Memoir suggests recording when a call starts, with a notification you can answer with one click."
+            ) {
+                switch permissions.notifications {
+                case .granted:
+                    GrantedBadge(text: "Notifications allowed")
+                case .notDetermined:
+                    Button("Allow Notifications") { Task { await permissions.requestNotifications() } }
+                        .controlSize(.large)
+                case .denied:
+                    VStack(spacing: 10) {
+                        Text("Notifications are turned off. You can allow them in System Settings, or show suggestions under the menu bar icon instead in Settings > Detection.")
+                            .foregroundStyle(.secondary)
+                        Button("Open System Settings") { Permissions.openNotifications() }
+                            .controlSize(.large)
+                    }
                 }
             }
 
@@ -248,7 +271,8 @@ struct OnboardingView: View {
             PageDots(count: Step.allCases.count, current: step.rawValue)
             Spacer()
 
-            if step == .calendar && !permissions.calendarGranted {
+            if (step == .calendar && !permissions.calendarGranted)
+                || (step == .notifications && permissions.notifications != .granted) {
                 Button("Not Now") { go(1) }
             }
             if step == .ready {

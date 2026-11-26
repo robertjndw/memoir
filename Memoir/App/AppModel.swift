@@ -558,7 +558,7 @@ final class AppModel {
                 self?.services.hints.hide()
             }
         }
-        services.hints.show(suggestion, actions: MeetingHintActions(
+        services.hints.show(suggestion, style: settings.menuBarTips ? .menuBarTip : .notification, actions: MeetingHintActions(
             accept: { [weak self] in
                 guard let self else { return }
                 services.hints.hide()
@@ -576,6 +576,13 @@ final class AppModel {
             muteApp: muteApp
         ))
     }
+
+    #if DEBUG
+    /// Shows a suggestion as if the detector had sent it, to check the hint without a call.
+    func debugSuggest(_ suggestion: MeetingSuggestion) {
+        handle(suggestion)
+    }
+    #endif
 
     // MARK: - Summary and transcript
 
@@ -870,6 +877,9 @@ final class AppModel {
     // like a regular app, with Dock icon and main menu, and goes back to the menu bar after.
 
     func regularWindowAppeared() {
+        // Previews show the onboarding window and then suppress it, and going back to the
+        // menu bar on the way out would stall the preview (see isRunningForPreviews).
+        guard !ProcessInfo.processInfo.isRunningForPreviews else { return }
         regularWindowCount += 1
         if NSApp.activationPolicy() != .regular {
             NSApp.setActivationPolicy(.regular)
@@ -878,6 +888,7 @@ final class AppModel {
     }
 
     func regularWindowDisappeared() {
+        guard !ProcessInfo.processInfo.isRunningForPreviews else { return }
         regularWindowCount = max(0, regularWindowCount - 1)
         if regularWindowCount == 0 {
             NSApp.setActivationPolicy(.accessory)

@@ -108,6 +108,6 @@ private final class InertDetector: MeetingDetecting {
 }
 
 private final class InertHints: MeetingHintPresenting {
-    func show(_ suggestion: MeetingSuggestion, actions: MeetingHintActions) {}
+    func show(_ suggestion: MeetingSuggestion, style: MeetingHintStyle, actions: MeetingHintActions) {}
     func hide() {}
 }
