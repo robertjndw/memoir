@@ -383,6 +383,11 @@ private nonisolated final class MutableLibrary: MeetingLibrary, @unchecked Senda
     }
 }
 
+/// Seconds the socket tests wait before giving up. Generous on purpose: the rest of the suite
+/// runs alongside them, and loading the real speech models can stall the whole process for a
+/// few seconds.
+nonisolated private let socketTimeout = 30
+
 /// Runs blocking socket reads and semaphore waits on a thread of their own. On the cooperative
 /// pool they hold threads the MCP server needs to answer, and on a CI machine with few cores
 /// that starves it until the client times out.
@@ -401,7 +406,7 @@ private nonisolated func offPool<T: Sendable>(_ body: @escaping @Sendable () thr
     private func pair() -> (server: Int32, peer: Int32) {
         var fds: [Int32] = [0, 0]
         #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        var timeout = timeval(tv_sec: socketTimeout, tv_usec: 0)
         setsockopt(fds[1], SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         return (fds[0], fds[1])
     }
@@ -425,7 +430,7 @@ private nonisolated func offPool<T: Sendable>(_ body: @escaping @Sendable () thr
         connection.start()
         let flood = Array((String(repeating: #"{"jsonrpc":"2.0","id":1,"method":"ping"}"# + "\n", count: 50)).utf8)
         #expect(write(peer, flood, flood.count) == flood.count)
-        #expect(try await offPool { closed.signal.wait(timeout: .now() + 5) } == .success)
+        #expect(try await offPool { closed.signal.wait(timeout: .now() + .seconds(socketTimeout)) } == .success)
         #expect(try await offPool { Self.seesEOF(peer) })
         withExtendedLifetime(connection) {}
     }
@@ -438,7 +443,7 @@ private nonisolated func offPool<T: Sendable>(_ body: @escaping @Sendable () thr
         connection.start()
         let response = String(repeating: "x", count: 600_000)
         for _ in 0..<4 { connection.send(response) }
-        #expect(try await offPool { closed.signal.wait(timeout: .now() + 5) } == .success)
+        #expect(try await offPool { closed.signal.wait(timeout: .now() + .seconds(socketTimeout)) } == .success)
         #expect(try await offPool { Self.seesEOF(peer) })
     }
 
@@ -527,7 +532,7 @@ private nonisolated func offPool<T: Sendable>(_ body: @escaping @Sendable () thr
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<100 where !condition() {
+        for _ in 0..<(socketTimeout * 50) where !condition() {
             try await Task.sleep(for: .milliseconds(20))
         }
     }
@@ -552,7 +557,7 @@ private nonisolated final class SocketClient: @unchecked Sendable {
             }
         }
         guard result == 0 else { throw POSIXError(.ECONNREFUSED) }
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        var timeout = timeval(tv_sec: socketTimeout, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     }
 

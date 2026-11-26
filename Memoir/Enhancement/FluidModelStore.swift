@@ -88,7 +88,7 @@ nonisolated struct FluidModelStore: OptionalModelManaging {
         if let install = Self.installs.withLock({ $0[model] }), install.isCancelled {
             await install.value
         }
-        try FluidModels.whileIdle(model) {
+        try FluidModels.whileIdle(model, in: directory) {
             let folder = FluidModels.folder(for: model, in: directory)
             guard FileManager.default.fileExists(atPath: folder.path) else { return }
             try FileManager.default.removeItem(at: folder)
@@ -183,11 +183,16 @@ nonisolated enum FluidModels {
 
     // MARK: - Install
 
-    /// What each model is busy with. One lock for both, so a removal can't slip in between an
-    /// enhancement checking that a model is installed and starting to use it.
+    /// What each model folder is busy with. One lock for both, so a removal can't slip in between
+    /// an enhancement checking that a model is installed and starting to use it. Keyed by folder,
+    /// not model, so a copy in a test's temporary directory isn't blocked by the real one.
     private struct Activity {
-        var installing: Set<OptionalModel> = []
-        var running: [OptionalModel: Int] = [:]
+        var installing: Set<String> = []
+        var running: [String: Int] = [:]
+    }
+
+    private static func activityKey(_ model: OptionalModel, in directory: URL) -> String {
+        folder(for: model, in: directory).standardizedFileURL.path
     }
 
     private static let activity = Mutex(Activity())
@@ -201,10 +206,11 @@ nonisolated enum FluidModels {
         in directory: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        guard activity.withLock({ $0.installing.insert(model).inserted }) else {
+        let key = activityKey(model, in: directory)
+        guard activity.withLock({ $0.installing.insert(key).inserted }) else {
             throw OptionalModelError.alreadyInstalling(model)
         }
-        defer { _ = activity.withLock { $0.installing.remove(model) } }
+        defer { _ = activity.withLock { $0.installing.remove(key) } }
 
         if isInstalled(model, in: directory) {
             progress(1)
@@ -262,10 +268,11 @@ nonisolated enum FluidModels {
     }
 
     /// Runs `body` while nothing downloads or uses `model`, holding that state until it returns.
-    static func whileIdle<T>(_ model: OptionalModel, _ body: () throws -> T) throws -> T {
-        try activity.withLock { activity in
-            guard !activity.installing.contains(model) else { throw OptionalModelError.inUse(model) }
-            guard activity.running[model, default: 0] == 0 else { throw OptionalModelError.running(model) }
+    static func whileIdle<T>(_ model: OptionalModel, in directory: URL, _ body: () throws -> T) throws -> T {
+        let key = activityKey(model, in: directory)
+        return try activity.withLock { activity in
+            guard !activity.installing.contains(key) else { throw OptionalModelError.inUse(model) }
+            guard activity.running[key, default: 0] == 0 else { throw OptionalModelError.running(model) }
             return try body()
         }
     }
@@ -277,15 +284,16 @@ nonisolated enum FluidModels {
         in directory: URL,
         _ body: () async throws -> T
     ) async throws -> T {
+        let keys = models.map { activityKey($0, in: directory) }
         try activity.withLock { activity in
             if let missing = models.first(where: { !isInstalled($0, in: directory) }) {
                 throw EnhancementError.modelMissing(missing)
             }
-            for model in models { activity.running[model, default: 0] += 1 }
+            for key in keys { activity.running[key, default: 0] += 1 }
         }
         defer {
             activity.withLock { activity in
-                for model in models { activity.running[model, default: 1] -= 1 }
+                for key in keys { activity.running[key, default: 1] -= 1 }
             }
         }
         return try await body()

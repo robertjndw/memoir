@@ -113,7 +113,17 @@ jobs:
             -scheme Memoir \
             -destination 'platform=macOS' \
             -derivedDataPath .build/test-derived \
+            -resultBundlePath .build/test-derived/MemoirTests.xcresult \
             -quiet
+
+      # -quiet only names the failing tests. The reasons are in the result bundle.
+      - name: Keep the test results
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: .build/test-derived/MemoirTests.xcresult
+          if-no-files-found: ignore
 
       - name: Import the Developer ID certificate
         if: env.HAS_DEVELOPER_ID == 'true'
