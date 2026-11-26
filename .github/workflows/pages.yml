@@ -28,7 +28,11 @@ jobs:
       run:
         shell: bash
     steps:
+      # Only needed for build-appcast.py. The release's tag may be gone or moved by the time
+      # this runs, after a release is deleted or re-created, and checkout fails on a moved tag.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Collect the signed releases
         env:
