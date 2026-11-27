@@ -46,8 +46,6 @@ Downloading them from Hugging Face is the only time they use the network.
 
 ### Meeting detection
 
-![Suggestions to record a Zoom call, one of them matched to a calendar event](docs/images/meeting-detected.png)
-
 - Memoir suggests recording when a meeting app takes the microphone (Zoom,
   Teams, FaceTime, Google Meet, Webex, Slack, Discord and a dozen more, plus
   web meetings in browsers, which count once the camera is on) or when a
